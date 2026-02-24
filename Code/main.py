@@ -10,6 +10,7 @@ class GameState(Enum):
     GAME = 2
     GAME_OVER = 3
     QUIT = 4
+    AUDIO_PLAYING = 5
 
 
 def main():
@@ -32,6 +33,9 @@ def main():
     # Game engine (initialized only when game starts)
     game_engine = None
 
+    # Audio setup
+    pygame.mixer.init()
+
     while run:
         mouse_pos = pygame.mouse.get_pos()
 
@@ -43,10 +47,19 @@ def main():
 
             # Handle button clicks in the menu state
             if GAME_STATE == GameState.MENU and startGamebutton.is_clicked(mouse_pos, event):
-                GAME_STATE = GameState.GAME
-                game_engine = GameEngine(800, 800)
-                pygame.mouse.set_visible(False)
-                print("Starting game...")
+                # Load and play game audio
+                try:
+                    pygame.mixer.music.load("../Audio/pacman_beginning.wav")
+                    pygame.mixer.music.play()
+                    GAME_STATE = GameState.AUDIO_PLAYING
+                    game_engine = GameEngine(paused=True)
+                    print("Playing audio...")
+                except Exception as e:
+                    print(f"Could not load audio: {e}")
+                    GAME_STATE = GameState.GAME
+                    game_engine = GameEngine(800, 800)
+                    pygame.mouse.set_visible(False)
+                    print("Starting game...")
 
             # Handle game input
             if GAME_STATE == GameState.GAME and game_engine:
@@ -67,6 +80,24 @@ def main():
             startGamebutton.text = "Start Game"
             startGamebutton.update(mouse_pos)
             startGamebutton.draw(screen, button_font)
+        elif GAME_STATE == GameState.AUDIO_PLAYING:
+            # Display loading/waiting message
+            loading_font = pygame.font.Font(None, 48)
+            loading_text = loading_font.render("Get Ready!", True, (255, 255, 0))
+            text_rect = loading_text.get_rect(center=(screen.get_width() // 2, screen.get_height() // 2))
+            screen.blit(loading_text, text_rect)
+
+
+            if game_engine:
+                game_engine.update()
+                game_engine.draw(screen)
+
+            # Check if audio has finished playing
+            if not pygame.mixer.music.get_busy():
+                GAME_STATE = GameState.GAME
+                game_engine = GameEngine(800, 800)
+                pygame.mouse.set_visible(False)
+                print("Starting game...")
         elif GAME_STATE == GameState.GAME:
             if game_engine:
                 game_engine.update()

@@ -4,12 +4,12 @@ import math
 class PacMan:
     """Represents the Pac-Man character"""
 
-    def __init__(self, x, y, tile_size=40):
+    def __init__(self, x, y, tile_size=40, speed=2):
         self.x = x
         self.y = y
         self.tile_size = tile_size
         self.size = tile_size  # Slightly smaller than tile for movement
-        self.speed = 2
+        self.speed = speed
         self.direction = (0, 0)  # Current direction
         self.next_direction = (0, 0)  # Next direction to move
         self.color = (255, 255, 0)  # Bright yellow
@@ -68,7 +68,7 @@ class PacMan:
 
     def get_grid_position(self):
         """Get Pac-Man's grid position"""
-        return (self.x // self.tile_size, self.y // self.tile_size)
+        return self.x // self.tile_size, self.y // self.tile_size
 
     def eat_pellet(self, points=10):
         """Add points and increment pellet counter"""

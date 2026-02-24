@@ -5,21 +5,28 @@ from Code.PacMan import PacMan
 class GameEngine:
     """Main game engine for Pac-Man gameplay"""
 
-    def __init__(self, screen_width=800, screen_height=800):
+    def __init__(self, screen_width=800, screen_height=800, pacman_speed=2, paused=False):
         self.screen_width = screen_width
         self.screen_height = screen_height
         self.tile_size = 40
 
         # Initialize game objects
-        self.maze = Maze(self.tile_size, width=screen_width // self.tile_size, height=screen_height // self.tile_size)
-        self.pacman = PacMan(self.tile_size, self.tile_size, self.tile_size)
+        self.maze = Maze(self.tile_size)
+        self.pacman = PacMan(self.tile_size, self.tile_size, self.tile_size, speed=pacman_speed)
 
         # Game state
         self.game_over = False
         self.won = False
         self.pellets = self._initialize_pellets()
         self.power_ups = []
-        self.frame_count = 0
+        self.paused = paused
+
+        # Sound effects
+        self.pellet_sound = None
+        try:
+            self.pellet_sound = pygame.mixer.Sound("../Audio/pacman_chomp.wav")
+        except Exception as e:
+            print(f"Could not load pellet sound: {e}")
 
     def _initialize_pellets(self):
         """Create pellets on all paths"""
@@ -32,6 +39,8 @@ class GameEngine:
         return pellets
 
     def handle_input(self, event):
+        if self.paused:
+            return
         """Handle keyboard input"""
         if event.type == pygame.KEYDOWN:
             if event.key == pygame.K_UP:
@@ -48,8 +57,6 @@ class GameEngine:
         if self.game_over or self.won:
             return
 
-        self.frame_count += 1
-
         # Update Pac-Man
         self.pacman.update(self.maze)
 
@@ -62,6 +69,9 @@ class GameEngine:
             distance = ((pacman_x - px) ** 2 + (pacman_y - py) ** 2) ** 0.5
             if distance < self.tile_size // 2:
                 self.pacman.eat_pellet(10)
+                # Play pellet sound effect
+                if self.pellet_sound and not self.paused:
+                    self.pellet_sound.play()
                 pellets_to_remove.append(i)
 
         for i in reversed(pellets_to_remove):
@@ -81,7 +91,8 @@ class GameEngine:
             pygame.draw.circle(surface, (184, 184, 184), (int(px), int(py)), 2)
 
         # Draw Pac-Man
-        self.pacman.draw(surface)
+        if not self.paused:
+            self.pacman.draw(surface)
 
         # Draw score
         font = pygame.font.Font(None, 32)
