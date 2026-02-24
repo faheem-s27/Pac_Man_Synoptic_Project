@@ -1,6 +1,7 @@
 import pygame
 from Code.Maze import Maze
 from Code.PacMan import PacMan
+from Code.Pathfinding import Pathfinding
 
 class GameEngine:
     """Main game engine for Pac-Man gameplay"""
@@ -23,13 +24,11 @@ class GameEngine:
 
         # Initialize game objects with procedural maze
         self.maze = Maze(self.tile_size, width=maze_width, height=maze_height,
-                        use_classic=use_classic_maze, algorithm=maze_algorithm)
+                         use_classic=use_classic_maze, algorithm=maze_algorithm)
 
         # Find safe spawn position for Pac-Man at bottom center
-        if not paused:
-            pacman_x, pacman_y = self._find_safe_spawn_bottom_center()
-            self.pacman = PacMan(pacman_x, pacman_y, self.tile_size, speed=pacman_speed)
-
+        pacman_x, pacman_y = self._find_safe_spawn_bottom_center()
+        self.pacman = PacMan(pacman_x, pacman_y, self.tile_size, speed=pacman_speed)
 
         # Game state
         self.game_over = False
@@ -38,12 +37,19 @@ class GameEngine:
         self.power_ups = []
         self.paused = paused
 
+        # Pathfinding system (tracks shortest path from top-left to Pac-Man)
+        self.pathfinding = Pathfinding(self.maze)
+        self.show_path = True  # Toggle to show/hide the path visualization
+
         # Sound effects
         self.pellet_sound = None
         try:
             self.pellet_sound = pygame.mixer.Sound("../Audio/pacman_chomp.wav")
         except Exception as e:
             print(f"Could not load pellet sound: {e}")
+
+    def unpause(self):
+        self.paused = False
 
     def _find_safe_spawn_bottom_center(self):
         """
@@ -110,6 +116,10 @@ class GameEngine:
                 self.pacman.set_direction((-self.pacman.speed, 0))
             elif event.key == pygame.K_RIGHT:
                 self.pacman.set_direction((self.pacman.speed, 0))
+            elif event.key == pygame.K_p:
+                # Toggle path visualization
+                self.show_path = not self.show_path
+                print(f"Path visualization: {'ON' if self.show_path else 'OFF'}")
 
     def update(self):
         """Update game logic"""
@@ -157,6 +167,10 @@ class GameEngine:
 
         # Draw Pac-Man
         self.pacman.draw(surface)
+
+        # Draw shortest path visualization (from top-left to Pac-Man)
+        if self.show_path:
+            self.pathfinding.draw_path(surface, self.pacman.x, self.pacman.y, color=(255, 100, 100), line_width=2)
 
         # Draw score
         font = pygame.font.Font(None, 32)

@@ -4,8 +4,8 @@ import pygame
 from Code.Button import Button
 from Code.GameEngine import GameEngine
 
-WINDOW_WIDTH = 800
-WINDOW_HEIGHT = 800
+WINDOW_WIDTH = 900
+WINDOW_HEIGHT = 900
 
 class GameState(Enum):
     MENU = 1
@@ -63,7 +63,8 @@ def main():
                     pygame.mixer.music.load("../Audio/pacman_beginning.wav")
                     pygame.mixer.music.play()
                     GAME_STATE = GameState.AUDIO_PLAYING
-                    game_engine = GameEngine(paused=True, screen_width=WINDOW_WIDTH, screen_height=WINDOW_HEIGHT)
+                    game_engine = GameEngine(use_classic_maze=False, maze_algorithm="prims", screen_width=WINDOW_WIDTH,
+                                             screen_height=WINDOW_HEIGHT, paused=True)
                     print("Playing audio...")
                 except Exception as e:
                     print(f"Could not load audio: {e}")
@@ -110,7 +111,7 @@ def main():
             # Check if audio has finished playing
             if not pygame.mixer.music.get_busy():
                 GAME_STATE = GameState.GAME
-                game_engine = GameEngine(use_classic_maze=False, maze_algorithm="prims", screen_width=WINDOW_WIDTH, screen_height=WINDOW_HEIGHT)
+                game_engine.unpause()
                 pygame.mouse.set_visible(False)
                 print("Starting game...")
         elif GAME_STATE == GameState.GAME:
