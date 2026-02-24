@@ -4,7 +4,7 @@ import math
 class PacMan:
     """Represents the Pac-Man character"""
 
-    def __init__(self, x, y, tile_size=40, speed=2):
+    def __init__(self, x, y, tile_size=40, speed=50):
         self.x = x
         self.y = y
         self.tile_size = tile_size
