@@ -1,0 +1,14 @@
+My aim for this project will be to scientifically evaluate and compare the generalisation capabilities of DQN and NEAT within a dynamic Pac-Man environment. 
+
+Generalisation is a term where the ability of an AI agent is measured based on how well it can perform in an environment it's never seen before. I will use the game Pac-Man to compare the 2 AI methodologies.
+
+I will do this by creating a Python based simulation environment that will be capable of procedural map generation which will be useful for adaptability. Then will create a Deep-Q Network Agent (DQN) & a Neuroevolution of Augmenting Topologies (NEAT) to then train both agents to mastery in training Pac-Man maps.
+
+During initial training I will use curriculum learning where the generated maps will be smaller & simpler mazes and gradually adding ghosts over time, so that the AI agents are not overwhelmed with completing the entire game objective and can focus on learning one thing at a time (collecting dots, eating ghosts when a power pellet is eaten etc)
+
+To train the agents I will be using my personal PC which is equipped with high end equipment that will be capable of training the agents and bring down the training duration from few weeks to a few days. They will play thousands of games over time and will implement Checkpointing so they can be paused and resumed when needed.#
+
+The final evaluation comes down to deploying both agents onto a final complete PacMan map that it has not yet seen before during training and they will be evaluated on gameplay performance ie how many levels it can complete, what high score is achieved & if they've discovered common game mechanics like the power pellets and understanding the different ghost's algorithm.
+
+The expected outcome will be that DQN will perform better on a game like Pac-Man as it can react better in a dynamic environment, but I will conduct this research to see if NEAT does have the chance to perform as good or better than DQN.
+
