@@ -1,34 +1,24 @@
-from enum import Enum
+from Code.GameEngine import GameState
 import pygame
-
 from Code.Button import Button
 from Code.GameEngine import GameEngine
 
 WINDOW_WIDTH = 900
 WINDOW_HEIGHT = 900
 
-class GameState(Enum):
-    MENU = 1
-    GAME = 2
-    GAME_OVER = 3
-    QUIT = 4
-    AUDIO_PLAYING = 5
-
-
 def main():
     GAME_STATE = GameState.MENU
-    print("Pac-Man Environment")
+    print("Pac-Man Environment - Faheem Saleem 22459265")
 
-    # make a window that is 800x800 pixels
     pygame.init()
 
     screen = pygame.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT))
     clock = pygame.time.Clock()
-    pygame.display.set_caption("Pac-Man Environment")
+    pygame.display.set_caption("Pac-Man Environment - Faheem Saleem 22459265")
     run = True
 
     # Menu button
-    startGamebutton = Button(300, 500, 200, 50, "Start Game")
+    startGamebutton = Button(WINDOW_WIDTH // 2, WINDOW_HEIGHT // 2, 200, 50, "Start Game")
     button_font = pygame.font.Font(None, startGamebutton.font_size)
     pygame.mouse.set_visible(True)
 
@@ -63,13 +53,14 @@ def main():
                     pygame.mixer.music.load("../Audio/pacman_beginning.wav")
                     pygame.mixer.music.play()
                     GAME_STATE = GameState.AUDIO_PLAYING
-                    game_engine = GameEngine(use_classic_maze=False, maze_algorithm="prims", screen_width=WINDOW_WIDTH,
+                    game_engine = GameEngine(use_classic_maze=False, maze_algorithm="recursive_backtracking", screen_width=WINDOW_WIDTH,
                                              screen_height=WINDOW_HEIGHT, paused=True)
                     print("Playing audio...")
                 except Exception as e:
                     print(f"Could not load audio: {e}")
                     GAME_STATE = GameState.GAME
-                    game_engine = GameEngine(screen_width=WINDOW_WIDTH, screen_height=WINDOW_HEIGHT)
+                    game_engine = GameEngine(use_classic_maze=False, maze_algorithm="recursive_backtracking", screen_width=WINDOW_WIDTH,
+                                             screen_height=WINDOW_HEIGHT)
                     pygame.mouse.set_visible(False)
                     print("Starting game...")
 
@@ -122,6 +113,7 @@ def main():
                 # Check if game ended
                 if game_engine.game_over or game_engine.won:
                     GAME_STATE = GameState.GAME_OVER
+
         elif GAME_STATE == GameState.GAME_OVER:
             # Display game over screen with a button to return to menu
             if game_engine:

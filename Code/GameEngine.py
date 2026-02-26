@@ -1,7 +1,15 @@
+from enum import Enum
 import pygame
 from Code.Maze import Maze
 from Code.PacMan import PacMan
 from Code.Pathfinding import Pathfinding
+
+class GameState(Enum):
+    MENU = 1
+    GAME = 2
+    GAME_OVER = 3
+    QUIT = 4
+    AUDIO_PLAYING = 5
 
 class GameEngine:
     """Main game engine for Pac-Man gameplay"""

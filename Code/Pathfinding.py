@@ -13,14 +13,14 @@ class Pathfinding:
         """
         self.maze = maze
         self.path = []
-        self.start_x = 1
-        self.start_y = 1
 
-    def find_shortest_path(self, target_x, target_y):
+    def find_shortest_path(self, start_x, start_y, target_x, target_y):
         """
         Find shortest path from top-left corner to target using BFS.
 
         Args:
+            start_x: Starting X grid coordinate
+            start_y: Starting Y grid coordinate
             target_x: Target X grid coordinate
             target_y: Target Y grid coordinate
 
@@ -28,12 +28,15 @@ class Pathfinding:
             List of (x, y) coordinates representing the shortest path
         """
         # Convert pixel coordinates to grid coordinates
+        start_grid_x = start_x // self.maze.tile_size
+        start_grid_y = start_y // self.maze.tile_size
+
         target_grid_x = target_x // self.maze.tile_size
         target_grid_y = target_y // self.maze.tile_size
 
         # BFS to find shortest path
-        queue = deque([(self.start_x, self.start_y, [(self.start_x, self.start_y)])])
-        visited = set([(self.start_x, self.start_y)])
+        queue = deque([(start_grid_x, start_grid_y, [(start_grid_x, start_grid_y)])])
+        visited = {(start_grid_x, start_grid_y)}
 
         while queue:
             x, y, path = queue.popleft()
@@ -61,19 +64,21 @@ class Pathfinding:
         self.path = []
         return []
 
-    def draw_path(self, surface, target_x, target_y, color=(255, 100, 100), line_width=2):
+    def draw_path(self, surface, start_x, start_y, target_x, target_y, color=(255, 100, 100), line_width=2):
         """
         Draw the shortest path on the screen.
 
         Args:
             surface: Pygame surface to draw on
-            target_x: Target X pixel coordinate (Pac-Man X)
-            target_y: Target Y pixel coordinate (Pac-Man Y)
+            start_x: Starting X pixel coordinate (Ghost X)
+            start_y: Starting Y pixel coordinate (Ghost Y)
+            target_x: Target X pixel coordinate (Dependent on Ghost behavior)
+            target_y: Target Y pixel coordinate (Dependent on Ghost behavior)
             color: Color of the path line (default red)
             line_width: Width of the path line
         """
         # Find the shortest path
-        path = self.find_shortest_path(target_x, target_y)
+        path = self.find_shortest_path(start_x, start_y, target_x, target_y)
 
         if not path or len(path) < 2:
             return

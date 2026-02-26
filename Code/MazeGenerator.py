@@ -26,7 +26,7 @@ CLASSIC_MAZE = [
 ]
 
 
-def generate_maze(use_classic=True, width=20, height=21, algorithm="random_walk"):
+def generate_maze(use_classic=True, width=20, height=21, algorithm="recursive_backtracking"):
     """
     Generate a maze layout using various algorithms.
 
