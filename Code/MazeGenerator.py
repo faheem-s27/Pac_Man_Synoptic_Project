@@ -327,7 +327,7 @@ def create_ghost_cage(maze, width, height):
     center_y = height // 2
 
     # Create a smaller 2x2 cage in the center
-    cage_width = 2
+    cage_width = 4
     cage_height = 2
     cage_left = center_x - cage_width // 2
     cage_top = center_y - cage_height // 2

@@ -1,94 +1,77 @@
-from collections import deque
+import heapq
+import itertools
 import pygame
 
+def _heuristic(x1, y1, x2, y2):
+    return abs(x1 - x2) + abs(y1 - y2)
+
 class Pathfinding:
-    """Pathfinding system using BFS to find shortest path in the maze"""
-
     def __init__(self, maze):
-        """
-        Initialize pathfinding with maze reference.
-
-        Args:
-            maze: Maze object containing the maze layout
-        """
         self.maze = maze
         self.path = []
 
-    def find_shortest_path(self, start_x, start_y, target_x, target_y):
-        """
-        Find shortest path from top-left corner to target using BFS.
+    def find_shortest_path(self, start_gx, start_gy, target_gx, target_gy, current_dir=(0, 0)):
+        """Finds path while penalizing 180-degree reversals to maintain forward flow."""
+        start = (start_gx, start_gy)
+        target = (target_gx, target_gy)
 
-        Args:
-            start_x: Starting X grid coordinate
-            start_y: Starting Y grid coordinate
-            target_x: Target X grid coordinate
-            target_y: Target Y grid coordinate
+        # Identify the tile directly behind the ghost's heading
+        behind_tile = (start_gx - current_dir[0], start_gy - current_dir[1])
 
-        Returns:
-            List of (x, y) coordinates representing the shortest path
-        """
-        # Convert pixel coordinates to grid coordinates
-        start_grid_x = start_x // self.maze.tile_size
-        start_grid_y = start_y // self.maze.tile_size
+        # If already at the target, return empty to trigger momentum logic
+        if start == target:
+            return []
 
-        target_grid_x = target_x // self.maze.tile_size
-        target_grid_y = target_y // self.maze.tile_size
+        counter = itertools.count()
+        open_set = []
+        heapq.heappush(open_set, (0, next(counter), start))
+        came_from = {}
+        g_score = {start: 0}
+        f_score = {start: _heuristic(start[0], start[1], target[0], target[1])}
+        open_set_hash = {start}
 
-        # BFS to find shortest path
-        queue = deque([(start_grid_x, start_grid_y, [(start_grid_x, start_grid_y)])])
-        visited = {(start_grid_x, start_grid_y)}
+        while open_set:
+            current = heapq.heappop(open_set)[2]
+            open_set_hash.remove(current)
 
-        while queue:
-            x, y, path = queue.popleft()
-
-            # Check if we reached the target
-            if x == target_grid_x and y == target_grid_y:
-                self.path = path
+            if current == target:
+                path = []
+                while current in came_from:
+                    path.append(current)
+                    current = came_from[current]
+                path.reverse()
                 return path
 
-            # Explore neighbors (up, down, left, right)
+            cx, cy = current
             for dx, dy in [(0, -1), (0, 1), (-1, 0), (1, 0)]:
-                nx, ny = x + dx, y + dy
+                neighbor = (cx + dx, cy + dy)
 
-                # Check if neighbor is valid and not visited
-                if (0 <= nx < self.maze.width and
-                    0 <= ny < self.maze.height and
-                    (nx, ny) not in visited and
-                    self.maze.maze[ny][nx] == 0):  # 0 = path, 1 = wall
+                if 0 <= neighbor[0] < self.maze.width and 0 <= neighbor[1] < self.maze.height:
+                    if self.maze.maze[neighbor[1]][neighbor[0]] == 0:
 
-                    visited.add((nx, ny))
-                    new_path = path + [(nx, ny)]
-                    queue.append((nx, ny, new_path))
+                        # Apply massive penalty to the 'behind' tile at the start node
+                        move_cost = 1
+                        if current == start and neighbor == behind_tile:
+                            move_cost = 1000
 
-        # No path found
-        self.path = []
+                        tent_g = g_score[current] + move_cost
+                        if tent_g < g_score.get(neighbor, float('inf')):
+                            came_from[neighbor] = current
+                            g_score[neighbor] = tent_g
+                            f_score[neighbor] = tent_g + _heuristic(neighbor[0], neighbor[1], target[0], target[1])
+
+                            if neighbor not in open_set_hash:
+                                open_set_hash.add(neighbor)
+                                heapq.heappush(open_set, (f_score[neighbor], next(counter), neighbor))
         return []
-
-    def draw_path(self, surface, start_x, start_y, target_x, target_y, color=(255, 100, 100), line_width=2):
-        """
-        Draw the shortest path on the screen.
-
-        Args:
-            surface: Pygame surface to draw on
-            start_x: Starting X pixel coordinate (Ghost X)
-            start_y: Starting Y pixel coordinate (Ghost Y)
-            target_x: Target X pixel coordinate (Dependent on Ghost behavior)
-            target_y: Target Y pixel coordinate (Dependent on Ghost behavior)
-            color: Color of the path line (default red)
-            line_width: Width of the path line
-        """
-        # Find the shortest path
-        path = self.find_shortest_path(start_x, start_y, target_x, target_y)
-
-        if not path or len(path) < 2:
+    def draw_path(self, surface, path, color=(255, 100, 100), line_width=2):
+        if not path:
             return
 
-        # Draw line segments connecting path nodes
         for i in range(len(path) - 1):
             x1, y1 = path[i]
             x2, y2 = path[i + 1]
 
-            # Convert grid coordinates to pixel coordinates (center of tile)
             px1 = x1 * self.maze.tile_size + self.maze.tile_size // 2
             py1 = y1 * self.maze.tile_size + self.maze.tile_size // 2
             px2 = x2 * self.maze.tile_size + self.maze.tile_size // 2
@@ -96,7 +79,6 @@ class Pathfinding:
 
             pygame.draw.line(surface, color, (px1, py1), (px2, py2), line_width)
 
-        # Draw circles at path nodes
         node_radius = 3
         for x, y in path:
             px = x * self.maze.tile_size + self.maze.tile_size // 2
@@ -104,10 +86,7 @@ class Pathfinding:
             pygame.draw.circle(surface, color, (px, py), node_radius)
 
     def get_path_length(self):
-        """Get the length of the current path"""
         return len(self.path)
 
     def get_path(self):
-        """Get the current cached path"""
         return self.path
-

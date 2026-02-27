@@ -1,136 +1,122 @@
-from Code.GameEngine import GameState
+import sys
 import pygame
+from Code.GameEngine import GameState, GameEngine
 from Code.Button import Button
-from Code.GameEngine import GameEngine
 
 WINDOW_WIDTH = 900
 WINDOW_HEIGHT = 900
+FPS = 60
 
 def main():
-    GAME_STATE = GameState.MENU
-    print("Pac-Man Environment - Faheem Saleem 22459265")
+    print("Pac-Man Environment - Initialization")
 
     pygame.init()
-
-    screen = pygame.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT))
-    clock = pygame.time.Clock()
-    pygame.display.set_caption("Pac-Man Environment - Faheem Saleem 22459265")
-    run = True
-
-    # Menu button
-    startGamebutton = Button(WINDOW_WIDTH // 2, WINDOW_HEIGHT // 2, 200, 50, "Start Game")
-    button_font = pygame.font.Font(None, startGamebutton.font_size)
-    pygame.mouse.set_visible(True)
-
-    # Game engine (initialized only when game starts)
-    game_engine = None
-
-    # Audio setup
     pygame.mixer.init()
 
-    # Load intermission music once at startup
+    screen = pygame.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT))
+    pygame.display.set_caption("Pac-Man Environment")
+    clock = pygame.time.Clock()
+
+    current_state = GameState.MENU
+    game_engine = None
+
+    btn_start = Button(WINDOW_WIDTH // 2 - 100, WINDOW_HEIGHT // 2, 200, 50, "Start Game")
+    font_button = pygame.font.Font(None, btn_start.font_size)
+    font_loading = pygame.font.Font(None, 48)
+
     menu_music_loaded = False
     try:
         pygame.mixer.music.load("../Audio/pacman_intermission.wav")
         menu_music_loaded = True
     except Exception as e:
-        print(f"Could not load intermission music: {e}")
+        print(f"Audio Warning (Menu): {e}")
 
+    ENGINE_CONFIG = {
+        "screen_width": WINDOW_WIDTH,
+        "screen_height": WINDOW_HEIGHT,
+        "use_classic_maze": False,
+        "maze_algorithm": "prims"
+    }
+
+    run = True
     while run:
         mouse_pos = pygame.mouse.get_pos()
+        events = pygame.event.get()
 
-        for event in pygame.event.get():
+        for event in events:
             if event.type == pygame.QUIT:
                 run = False
-                pygame.quit()
-                print("User exited")
+                continue
 
-            # Handle button clicks in the menu state
-            if GAME_STATE == GameState.MENU and startGamebutton.is_clicked(mouse_pos, event):
-                # Stop menu music and load game audio
-                pygame.mixer.music.stop()
-                try:
-                    pygame.mixer.music.load("../Audio/pacman_beginning.wav")
-                    pygame.mixer.music.play()
-                    GAME_STATE = GameState.AUDIO_PLAYING
-                    game_engine = GameEngine(use_classic_maze=False, maze_algorithm="recursive_backtracking", screen_width=WINDOW_WIDTH,
-                                             screen_height=WINDOW_HEIGHT, paused=True)
-                    print("Playing audio...")
-                except Exception as e:
-                    print(f"Could not load audio: {e}")
-                    GAME_STATE = GameState.GAME
-                    game_engine = GameEngine(use_classic_maze=False, maze_algorithm="recursive_backtracking", screen_width=WINDOW_WIDTH,
-                                             screen_height=WINDOW_HEIGHT)
+            match current_state:
+                case GameState.MENU:
+                    if btn_start.is_clicked(mouse_pos, event):
+                        pygame.mixer.music.stop()
+                        try:
+                            pygame.mixer.music.load("../Audio/pacman_beginning.wav")
+                            pygame.mixer.music.play()
+                            current_state = GameState.AUDIO_PLAYING
+                            game_engine = GameEngine(**ENGINE_CONFIG, paused=True)
+                        except Exception as e:
+                            print(f"Audio Warning: {e}. Skipping intro.")
+                            current_state = GameState.GAME
+                            game_engine = GameEngine(**ENGINE_CONFIG, paused=False)
+                            pygame.mouse.set_visible(False)
+
+                case GameState.GAME:
+                    if game_engine:
+                        game_engine.handle_input(event)
+
+                case GameState.GAME_OVER:
+                    if btn_start.is_clicked(mouse_pos, event):
+                        pygame.mixer.music.stop()
+                        current_state = GameState.MENU
+                        game_engine = None
+                        pygame.mouse.set_visible(True)
+
+        match current_state:
+            case GameState.MENU:
+                if menu_music_loaded and not pygame.mixer.music.get_busy():
+                    pygame.mixer.music.play(loops=-1)
+                btn_start.text = "Start Game"
+                btn_start.update(mouse_pos)
+
+            case GameState.AUDIO_PLAYING:
+                if not pygame.mixer.music.get_busy():
+                    current_state = GameState.GAME
+                    if game_engine:
+                        game_engine.unpause()
                     pygame.mouse.set_visible(False)
-                    print("Starting game...")
 
-            # Handle game input
-            if GAME_STATE == GameState.GAME and game_engine:
-                game_engine.handle_input(event)
+            case GameState.GAME:
+                if game_engine:
+                    game_engine.update()
+                    if game_engine.game_over or game_engine.won:
+                        current_state = GameState.GAME_OVER
+                        pygame.mouse.set_visible(True)
 
-            # Return to menu from game over
-            if GAME_STATE == GameState.GAME_OVER and startGamebutton.is_clicked(mouse_pos, event):
-                pygame.mixer.music.stop()
-                GAME_STATE = GameState.MENU
-                game_engine = None
-                pygame.mouse.set_visible(True)
-                print("Returning to menu...")
+            case GameState.GAME_OVER:
+                btn_start.text = "Back to Menu"
+                btn_start.update(mouse_pos)
 
-        # just black screen
         screen.fill((0, 0, 0))
 
-        if GAME_STATE == GameState.MENU:
-            # Play menu music only once
-            if menu_music_loaded and not pygame.mixer.music.get_busy():
-                pygame.mixer.music.play(loops=-1)  # -1 means loop infinitely
+        if current_state in (GameState.AUDIO_PLAYING, GameState.GAME, GameState.GAME_OVER) and game_engine:
+            game_engine.draw(screen)
 
-            # Update and draw button
-            startGamebutton.text = "Start Game"
-            startGamebutton.update(mouse_pos)
-            startGamebutton.draw(screen, button_font)
-        elif GAME_STATE == GameState.AUDIO_PLAYING:
-            # Display loading/waiting message
-            loading_font = pygame.font.Font(None, 48)
-            loading_text = loading_font.render("Get Ready!", True, (255, 255, 0))
-            text_rect = loading_text.get_rect(center=(screen.get_width() // 2, screen.get_height() // 2))
-            screen.blit(loading_text, text_rect)
-
-            if game_engine:
-                game_engine.update()
-                game_engine.draw(screen)
-
-            # Check if audio has finished playing
-            if not pygame.mixer.music.get_busy():
-                GAME_STATE = GameState.GAME
-                game_engine.unpause()
-                pygame.mouse.set_visible(False)
-                print("Starting game...")
-        elif GAME_STATE == GameState.GAME:
-            if game_engine:
-                game_engine.update()
-                game_engine.draw(screen)
-
-                # Check if game ended
-                if game_engine.game_over or game_engine.won:
-                    GAME_STATE = GameState.GAME_OVER
-
-        elif GAME_STATE == GameState.GAME_OVER:
-            # Display game over screen with a button to return to menu
-            if game_engine:
-                game_engine.draw(screen)
-
-            # Draw restart button
-            pygame.mouse.set_visible(True)
-            startGamebutton.update(mouse_pos)
-            startGamebutton.text = "Back to Menu"
-            startGamebutton.draw(screen, button_font)
-        else:
-            print("Invalid game state.")
+        match current_state:
+            case GameState.MENU | GameState.GAME_OVER:
+                btn_start.draw(screen, font_button)
+            case GameState.AUDIO_PLAYING:
+                loading_text = font_loading.render("GET READY!", True, (255, 255, 0))
+                text_rect = loading_text.get_rect(center=(WINDOW_WIDTH // 2, WINDOW_HEIGHT // 2))
+                screen.blit(loading_text, text_rect)
 
         pygame.display.flip()
+        clock.tick(FPS)
 
-        # runs at 60fps for human perception
-        clock.tick(60)
+    pygame.quit()
+    sys.exit()
 
 if __name__ == "__main__":
     main()
