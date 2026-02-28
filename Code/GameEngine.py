@@ -9,9 +9,9 @@ def parse_resolution(resolution_str):
     """Parse resolution string like '800x800' to (width, height)."""
     try:
         w, h = resolution_str.split('x')
-        return (int(w), int(h))
+        return int(w), int(h)
     except:
-        return (800, 800)
+        return 800, 800
 
 class GameState(Enum):
     MENU = 1
@@ -83,10 +83,28 @@ class GameEngine:
         self.global_scatter_mode = True   # Start in scatter mode
 
         self.pellet_sound = None
+        self.pellet_channel = None  # Dedicated channel for pellet sounds
+        self.death_sound = None
+        self.death_channel = None  # Dedicated channel for death sound
+        self.eatghost_sound = None
+        self.eatghost_channel = None  # Dedicated channel for eating ghost sound
         try:
             self.pellet_sound = pygame.mixer.Sound("../Audio/pacman_chomp.wav")
+            self.pellet_channel = pygame.mixer.Channel(0)  # Use channel 0 for pellets
         except Exception as e:
-            print(f"Audio Warning: {e}")
+            print(f"Audio Warning (pellet): {e}")
+
+        try:
+            self.death_sound = pygame.mixer.Sound("../Audio/pacman_death.mp3")
+            self.death_channel = pygame.mixer.Channel(1)  # Use channel 1 for death
+        except Exception as e:
+            print(f"Audio Warning (death): {e}")
+
+        try:
+            self.eatghost_sound = pygame.mixer.Sound("../Audio/pacman_eatghost.wav")
+            self.eatghost_channel = pygame.mixer.Channel(2)  # Use channel 2 for eating ghost
+        except Exception as e:
+            print(f"Audio Warning (eatghost): {e}")
 
     def unpause(self):
         self.paused = False
@@ -373,8 +391,10 @@ class GameEngine:
             distance_sq = (pacman_x - px) ** 2 + (pacman_y - py) ** 2
             if distance_sq < collision_sq_threshold:
                 self.pacman.eat_pellet(10)
-                if self.pellet_sound:
-                    pass
+                # Play chomp sound only if channel is not busy (prevents overlapping)
+                if self.pellet_sound and self.pellet_channel:
+                    if not self.pellet_channel.get_busy():
+                        self.pellet_channel.play(self.pellet_sound)
                 pellets_to_remove.append(i)
 
         for i in reversed(pellets_to_remove):
@@ -453,12 +473,21 @@ class GameEngine:
                     self.pacman.eat_pellet(ghost_points)
                     self.ghosts_eaten_combo += 1
 
+                    # Play eat ghost sound
+                    if self.eatghost_sound and self.eatghost_channel:
+                        self.eatghost_channel.play(self.eatghost_sound)
+
                     # Enter eaten mode - ghost will return to cage then respawn
                     ghost.enter_eaten_mode()
 
                 elif not self.god_mode:
                     # Ghost catches Pac-Man - lose a life
                     self.lives -= 1
+
+                    # Play death sound
+                    if self.death_sound and self.death_channel:
+                        self.death_channel.play(self.death_sound)
+
                     if self.lives <= 0:
                         self.game_over = True
                         self.game_state = GameState.GAME_OVER

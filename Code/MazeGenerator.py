@@ -1,6 +1,7 @@
 import random
 
 # Maze layout: 0 = path, 1 = wall
+# Note: Rows 10 have 0s on the edges (positions 0 and 19) for teleport tunnels
 CLASSIC_MAZE = [
     [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
     [1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1],
@@ -12,7 +13,7 @@ CLASSIC_MAZE = [
     [1, 1, 1, 1, 0, 1, 1, 1, 1, 0, 0, 1, 1, 1, 1, 0, 1, 1, 1, 1],
     [1, 1, 1, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 1, 1, 1, 1],
     [1, 1, 1, 1, 0, 1, 0, 1, 1, 1, 1, 1, 1, 0, 1, 0, 1, 1, 1, 1],
-    [0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    [0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],  # Teleport row
     [1, 1, 1, 1, 0, 1, 0, 1, 1, 1, 1, 1, 1, 0, 1, 0, 1, 1, 1, 1],
     [1, 1, 1, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 1, 1, 1, 1],
     [1, 1, 1, 1, 0, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1],
@@ -117,6 +118,9 @@ def generate_recursive_backtracking(width, height):
     # Mirror the left half to right half for symmetry
     mirror_maze(maze, width, height)
 
+    # Add teleport tunnels for wraparound movement
+    create_teleport_tunnels(maze, width, height)
+
     # Add strategic loops to avoid dead ends
     eliminate_dead_ends(maze, width, height)
 
@@ -179,6 +183,9 @@ def generate_prims(width, height):
 
     # Mirror the left half to right half for symmetry
     mirror_maze(maze, width, height)
+
+    # Add teleport tunnels for wraparound movement
+    create_teleport_tunnels(maze, width, height)
 
     # Add strategic loops to avoid dead ends
     eliminate_dead_ends(maze, width, height)
@@ -263,6 +270,9 @@ def generate_random_walk(width, height):
     # Mirror the left half to right half for symmetry
     mirror_maze(maze, width, height)
 
+    # Add teleport tunnels for wraparound movement
+    create_teleport_tunnels(maze, width, height)
+
     # Add strategic loops to avoid dead ends
     eliminate_dead_ends(maze, width, height)
 
@@ -337,6 +347,35 @@ def create_ghost_cage(maze, width, height):
         for x in range(cage_left, cage_left + cage_width):
             if 0 < x < width - 1 and 0 < y < height - 1:
                 maze[y][x] = 0
+
+
+def create_teleport_tunnels(maze, width, height):
+    """
+    Create teleport tunnels on the left and right edges of the maze.
+    Opens a horizontal corridor at the middle height for wraparound movement.
+    """
+    # Find middle row
+    teleport_row = height // 2
+
+    # Ensure the entire row is a path (clear any walls)
+    for x in range(width):
+        maze[teleport_row][x] = 0
+
+    # Make sure there's a wall in the center to separate the two tunnels
+    center_x = width // 2
+    maze[teleport_row][center_x] = 1
+
+    # Open the edges explicitly (positions 0 and width-1)
+    maze[teleport_row][0] = 0
+    maze[teleport_row][width - 1] = 0
+
+    # Connect the teleport row to surrounding paths
+    # Clear a few cells before and after to ensure connectivity
+    for x in range(1, 7):  # Left side connection
+        maze[teleport_row][x] = 0
+    for x in range(width - 7, width - 1):  # Right side connection
+        maze[teleport_row][x] = 0
+
 
 
 

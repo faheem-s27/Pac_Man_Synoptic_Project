@@ -49,6 +49,9 @@ class PacMan:
             self.x = next_x
             self.y = next_y
 
+            # Handle teleportation at maze edges
+            self.x, self.y = maze.handle_teleportation(self.x, self.y)
+
     def draw(self, surface):
         center_x = self.x + self.size // 2
         center_y = self.y + self.size // 2

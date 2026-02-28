@@ -120,9 +120,9 @@ class Ghost:
             cage_gx = int(self.cage_x // self.tile_size)
             cage_gy = int(self.cage_y // self.tile_size)
 
-            # Find path to cage (no direction restriction for eaten ghosts)
+            # Find path to cage (no direction restriction for eaten ghosts, no wraparound)
             self.path = self.pathfinding.find_shortest_path(
-                current_gx, current_gy, cage_gx, cage_gy, (0, 0)
+                current_gx, current_gy, cage_gx, cage_gy, (0, 0), allow_wraparound=False
             )
             self.path_index = 0
 
@@ -259,9 +259,9 @@ class Ghost:
                 # Reset to spawning state
                 self.reset_spawn()
             else:
-                # Recalculate path if needed
+                # Recalculate path if needed (disable wraparound for eaten mode)
                 self.path = self.pathfinding.find_shortest_path(
-                    current_gx, current_gy, cage_gx, cage_gy, (0, 0)
+                    current_gx, current_gy, cage_gx, cage_gy, (0, 0), allow_wraparound=False
                 )
                 self.path_index = 0
 

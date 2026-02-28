@@ -11,11 +11,61 @@ class Maze:
         self.width = len(self.maze[0])
         self.height = len(self.maze)
 
+        # Find teleport tunnel row (row where both edges are open)
+        self.teleport_row = self._find_teleport_row()
+
+    def _find_teleport_row(self):
+        """Find the row that has open edges on both left and right for teleportation."""
+        for y in range(self.height):
+            # Check if both left (x=0) and right (x=width-1) are paths
+            if self.maze[y][0] == 0 and self.maze[y][self.width - 1] == 0:
+                return y
+        return None  # No teleport row found
+
+    def handle_teleportation(self, x, y):
+        """Handle wraparound teleportation at maze edges. Returns new (x, y) position."""
+        if self.teleport_row is None:
+            return x, y  # No teleportation if no teleport row found
+
+        # Get the character's tile position
+        tile_y = int(y) // self.tile_size
+
+        # Only teleport on the teleport row
+        if tile_y != self.teleport_row:
+            return x, y
+
+        # Check if character has gone off the edges (pixel-level)
+        max_x = self.width * self.tile_size
+
+        # If Pacman goes off the left edge (x is negative), wrap to right
+        if x < 0:
+            new_x = max_x + x  # Preserve the offset
+            return new_x, y
+
+        # If Pacman goes off the right edge, wrap to left
+        if x >= max_x:
+            new_x = x - max_x  # Preserve the offset
+            return new_x, y
+
+        return x, y
+
     def is_wall(self, x, y):
         x = int(x)
         y = int(y)
+
+        # Allow wraparound on teleport row
+        if self.teleport_row is not None and y == self.teleport_row:
+            # If going off left edge, it's not a wall (will wraparound)
+            if x < 0:
+                return False
+            # If going off right edge, it's not a wall (will wraparound)
+            if x >= self.width:
+                return False
+
+        # Normal bounds checking for other rows
         if x < 0 or x >= self.width or y < 0 or y >= self.height:
             return True
+
         return self.maze[y][x] == 1
 
     def can_move(self, x, y, size):
@@ -25,6 +75,15 @@ class Maze:
         right = (x + size - 1) // self.tile_size
         top = y // self.tile_size
         bottom = (y + size - 1) // self.tile_size
+
+        # Handle wraparound: wrap tile coordinates if on teleport row
+        if self.teleport_row is not None and top == self.teleport_row:
+            # Wrap left coordinate if negative
+            if left < 0:
+                left = self.width - 1
+            # Wrap right coordinate if beyond width
+            if right >= self.width:
+                right = 0
 
         return not (self.is_wall(left, top) or self.is_wall(right, top) or
                     self.is_wall(left, bottom) or self.is_wall(right, bottom))
