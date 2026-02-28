@@ -3,7 +3,7 @@ import pygame
 from Code.Maze import Maze
 from Code.PacMan import PacMan
 from Code.Pathfinding import Pathfinding
-from Code.Ghost import Ghost, Pinky, Clyde, GhostState
+from Code.Ghost import Ghost, Pinky, Clyde, Inky, GhostState
 
 class GameState(Enum):
     MENU = 1
@@ -13,10 +13,11 @@ class GameState(Enum):
     AUDIO_PLAYING = 5
 
 class GameEngine:
-    def __init__(self, screen_width=800, screen_height=800, pacman_speed=2, paused=False, use_classic_maze=True, maze_algorithm="recursive_backtracking"):
+    def __init__(self, screen_width=800, screen_height=800, pacman_speed=2, paused=False, use_classic_maze=True, maze_algorithm="recursive_backtracking", enable_ghosts=True):
         self.screen_width = screen_width
         self.screen_height = screen_height
         self.tile_size = 40
+        self.enable_ghosts = enable_ghosts
 
         maze_width = (screen_width // self.tile_size)
         maze_height = (screen_height // self.tile_size)
@@ -31,7 +32,8 @@ class GameEngine:
         self.pacman = PacMan(pacman_x, pacman_y, self.tile_size, speed=pacman_speed)
 
         self.ghosts = []
-        self._initialize_ghosts()
+        if self.enable_ghosts:
+            self._initialize_ghosts()
 
         self.game_over = False
         self.won = False
@@ -85,6 +87,13 @@ class GameEngine:
         clyde.color = (255, 184, 82)  # Orange color
         clyde.state = GhostState.CHASE
         self.ghosts.append(clyde)
+
+        # Inky (Cyan) - targets based on vector from Blinky
+        # Spawn below Blinky, pass Blinky reference for targeting
+        inky = Inky(cage_center_x, cage_center_y + self.tile_size, self.tile_size, speed=2, maze=self.maze, name="Inky", blinky=blinky)
+        inky.color = (0, 255, 255)  # Cyan color
+        inky.state = GhostState.CHASE
+        self.ghosts.append(inky)
 
     def _initialize_pellets(self):
         pellets = []

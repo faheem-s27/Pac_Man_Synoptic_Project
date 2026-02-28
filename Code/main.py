@@ -35,7 +35,9 @@ def main():
         "screen_width": WINDOW_WIDTH,
         "screen_height": WINDOW_HEIGHT,
         "use_classic_maze": False,
-        "maze_algorithm": "prims"
+        "maze_algorithm": "prims",
+        "enable_ghosts": True,
+        "pacman_speed": 4
     }
 
     run = True
