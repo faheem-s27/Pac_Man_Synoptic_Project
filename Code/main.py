@@ -3,8 +3,8 @@ import pygame
 from Code.GameEngine import GameState, GameEngine
 from Code.Button import Button
 
-WINDOW_WIDTH = 900
-WINDOW_HEIGHT = 900
+WINDOW_WIDTH = 800
+WINDOW_HEIGHT = 800
 FPS = 60
 
 def main():
@@ -35,9 +35,13 @@ def main():
         "screen_width": WINDOW_WIDTH,
         "screen_height": WINDOW_HEIGHT,
         "use_classic_maze": False,
-        "maze_algorithm": "prims",
+        "maze_algorithm": "recursive_backtracking",
         "enable_ghosts": True,
-        "pacman_speed": 4
+        "pacman_speed": 2,
+        "ghost_speed": 1.9,
+        "tile_size": 20,
+        "lives": 5,
+        "god_mode": True
     }
 
     run = True

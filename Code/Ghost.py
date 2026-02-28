@@ -8,6 +8,7 @@ class GhostState(Enum):
     SCATTER = 2
     EATEN = 3
     FRIGHTENED = 4
+    SPAWNING = 5
 
 
 def _get_opposite_dir(direction):
@@ -22,7 +23,7 @@ class Ghost:
 
     def __init__(self, x, y, tile_size=40, speed=2, maze=None, name="Ghost"):
         self.tile_size = tile_size
-        self.size = 30
+        self.size = tile_size
         self.speed = speed
         self.maze = maze
         self.name = name
@@ -32,7 +33,7 @@ class Ghost:
         self.y = float(y + self.offset)
 
         self.current_dir = (0, 0)
-        self.state = GhostState.SCATTER
+        self.state = GhostState.SPAWNING  # Start in spawning state
         self.pathfinding = Pathfinding(maze)
         self.path = []
         self.path_index = 0
@@ -41,6 +42,11 @@ class Ghost:
 
         self.mode_timer = 0
         self.is_scatter = True
+
+        # Spawning system
+        self.spawn_delay = 0  # Will be set by GameEngine
+        self.spawn_timer = 0
+        self.is_spawned = False
 
     @property
     def grid_pos(self):
@@ -54,7 +60,27 @@ class Ghost:
         return (abs((self.x - self.offset) % self.tile_size) <= tolerance and
                 abs((self.y - self.offset) % self.tile_size) <= tolerance)
 
+    def reset_spawn(self):
+        """Reset ghost to spawning state."""
+        self.state = GhostState.SPAWNING
+        self.spawn_timer = 0
+        self.is_spawned = False
+        self.current_dir = (0, 0)
+        self.path = []
+        self.mode_timer = 0
+        self.is_scatter = True
+
     def update(self, pacman):
+        # Handle spawning state
+        if self.state == GhostState.SPAWNING:
+            self.spawn_timer += 1
+            if self.spawn_timer >= self.spawn_delay:
+                # Spawn complete, transition to scatter mode
+                self.is_spawned = True
+                self.state = GhostState.SCATTER
+                self.spawn_timer = 0
+            return  # Don't update while spawning
+
         self.mode_timer += 1
 
         # Only switch modes at intersections to prevent pathing glitches
@@ -180,8 +206,15 @@ class Ghost:
         return self.maze.width - 2, 1  # Blinky top-right corner inside walls
 
     def draw(self, surface):
-        if self.color:
-            pygame.draw.rect(surface, self.color, (int(self.x), int(self.y), self.size, self.size))
+        # Only draw if spawned
+        if self.is_spawned and self.color:
+            center_x = self.x + self.size // 2
+            center_y = self.y + self.size // 2
+            pygame.draw.circle(surface, self.color, (int(center_x), int(center_y)), self.size // 3)
+        if not self.is_spawned:
+            center_x = self.x + self.size // 2
+            center_y = self.y + self.size // 2
+            pygame.draw.circle(surface, (50, 50, 50), (int(center_x), int(center_y)), self.size // 3)
 
 
 class Pinky(Ghost):

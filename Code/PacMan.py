@@ -18,7 +18,8 @@ class PacMan:
         center_y = self.y + self.size // 2
         tile_offset_x = center_x % self.tile_size
         tile_offset_y = center_y % self.tile_size
-        tolerance = 2
+        # Dynamic tolerance based on speed to handle speeds 2, 3, 4, etc.
+        tolerance = self.speed + 1
         return (abs(tile_offset_x - self.tile_size // 2) < tolerance and
                 abs(tile_offset_y - self.tile_size // 2) < tolerance)
 
