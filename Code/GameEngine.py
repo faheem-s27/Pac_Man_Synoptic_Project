@@ -5,6 +5,14 @@ from Code.PacMan import PacMan
 from Code.Pathfinding import Pathfinding
 from Code.Ghost import Ghost, Pinky, Clyde, Inky, GhostState
 
+def parse_resolution(resolution_str):
+    """Parse resolution string like '800x800' to (width, height)."""
+    try:
+        w, h = resolution_str.split('x')
+        return (int(w), int(h))
+    except:
+        return (800, 800)
+
 class GameState(Enum):
     MENU = 1
     GAME = 2
@@ -17,7 +25,12 @@ class GameEngine:
                  paused=False, use_classic_maze=True,
                  maze_algorithm="recursive_backtracking",
                  enable_ghosts=True, tile_size=40, lives=3,
+                 window_resolution="800x800",
                  god_mode=False):
+        # Parse resolution string if provided
+        if isinstance(window_resolution, str):
+            screen_width, screen_height = parse_resolution(window_resolution)
+
         self.screen_width = screen_width
         self.screen_height = screen_height
         self.tile_size = tile_size

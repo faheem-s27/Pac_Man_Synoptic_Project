@@ -18,16 +18,20 @@ class PacMan:
         center_y = self.y + self.size // 2
         tile_offset_x = center_x % self.tile_size
         tile_offset_y = center_y % self.tile_size
-        # Dynamic tolerance based on speed to handle speeds 2, 3, 4, etc.
-        tolerance = self.speed + 1
+
+        # Tolerance is proportional to tile_size (not speed)
+        # This ensures smooth turning at any tile size and speed combination
+        # Larger tiles = larger tolerance for alignment
+        tolerance = max(self.tile_size // 10, 3)  # Min 3, scales with tile size
+
         return (abs(tile_offset_x - self.tile_size // 2) < tolerance and
                 abs(tile_offset_y - self.tile_size // 2) < tolerance)
 
     def set_direction(self, direction):
-        if self.is_aligned_to_tile():
-            self.next_direction = direction
-        else:
-            self.next_direction = direction
+        """Allow direction changes more freely - don't require perfect tile alignment"""
+        # Always allow storing the next direction
+        # The update() method will apply it when safe
+        self.next_direction = direction
 
     def update(self, maze):
         if self.is_aligned_to_tile() and self.next_direction != (0, 0):
