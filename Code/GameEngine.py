@@ -44,7 +44,7 @@ class GameEngine:
         self.game_over = False
         self.won = False
         self.pellets = self._initialize_pellets()
-        self.power_ups = []
+        self.power_pellets = self._initialize_power_pellets()
         self.paused = paused
 
         self.pathfinding = Pathfinding(self.maze)
@@ -172,6 +172,55 @@ class GameEngine:
                                    y * self.tile_size + self.tile_size // 2))
         return pellets
 
+    def _initialize_power_pellets(self):
+        """Initialize power pellets in the four corners of the maze."""
+        power_pellets = []
+
+        # Define corner search areas (distance from each corner to search)
+        search_radius = 5
+
+        # Corner positions to check: (start_x, start_y, dx, dy)
+        # dx and dy determine the search direction from the corner
+        corners = [
+            # Top-left corner
+            (1, 1, 1, 1),
+            # Top-right corner
+            (self.maze.width - 2, 1, -1, 1),
+            # Bottom-left corner
+            (1, self.maze.height - 2, 1, -1),
+            # Bottom-right corner
+            (self.maze.width - 2, self.maze.height - 2, -1, -1)
+        ]
+
+        for start_x, start_y, dx, dy in corners:
+            # Search for the nearest open space from this corner
+            found = False
+            for radius in range(search_radius):
+                if found:
+                    break
+                for offset_x in range(radius + 1):
+                    offset_y = radius - offset_x
+                    test_x = start_x + (offset_x * dx)
+                    test_y = start_y + (offset_y * dy)
+
+                    # Check if within bounds and not a wall
+                    if 0 <= test_x < self.maze.width and 0 <= test_y < self.maze.height:
+                        if self.maze.maze[test_y][test_x] == 0:
+                            # Found valid position, add power pellet
+                            px = test_x * self.tile_size + self.tile_size // 2
+                            py = test_y * self.tile_size + self.tile_size // 2
+                            power_pellets.append((px, py))
+
+                            # Remove regular pellet from this position if it exists
+                            pellet_to_remove = (px, py)
+                            if pellet_to_remove in self.pellets:
+                                self.pellets.remove(pellet_to_remove)
+
+                            found = True
+                            break
+
+        return power_pellets
+
     def handle_input(self, event):
         if self.paused: return
         if event.type == pygame.KEYDOWN:
@@ -251,8 +300,13 @@ class GameEngine:
     def draw(self, surface):
         self.maze.draw(surface)
 
+        # Draw regular pellets
         for px, py in self.pellets:
             pygame.draw.circle(surface, (184, 184, 184), (int(px), int(py)), 2)
+
+        # Draw power pellets (larger, yellow/white, flashing optional)
+        for px, py in self.power_pellets:
+            pygame.draw.circle(surface, (255, 255, 200), (int(px), int(py)), 6)
 
         self.pacman.draw(surface)
 
