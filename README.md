@@ -1,16 +1,10 @@
-## **Project Overview: Generalization in Dynamic Pac-Man Environments**
+# Faheem’s Pac-Man AI Experiment (Work in Progress lol)
+So, I’m building this Pac-Man game in Python because I want to see if an AI can actually play a map it’s never seen before. Usually, they just memorize one level and then completely freak out if you move a single wall. I’m planning to use two things called DQN and NEAT to see which one is actually "smart" and which one is just faking it.
 
-### **1. Context and Objective**
-* **Setup:** Generalization—an AI agent's capacity to maintain high performance in unseen environments—remains a **significant** challenge. Current models frequently overfit to static training data, creating a **vital** limitation for dynamic deployment.
-* **Action:** This project evaluates the generalization capabilities of Deep-Q Networks (DQN) and Neuroevolution of Augmenting Topologies (NEAT) within a custom Python-based Pac-Man simulation built for procedural map generation.
-* **Result:** Quantifying which algorithmic approach yields superior adaptability is highly **beneficial** for informing future model selection, linking technical architecture directly to operational reliability.
+I haven't actually built the AI parts yet (don't judge), but that’s the plan.
 
-### **2. Methodology and Implementation**
-* **Setup:** Training agents on a fully realized Pac-Man map from initialization leads to sparse rewards, delayed convergence, and operational inefficiency.
-* **Action:** A curriculum learning framework will incrementally introduce maze complexity and adversarial elements (ghosts). **Furthermore**, hardware acceleration and checkpointing protocols will be deployed to pause and resume states. **In addition to** these steps, it is **crucial** to implement experience replay to stabilize the DQN against catastrophic forgetting.
-* **Result:** This phased scaling brings the training duration down from weeks to days. **Consequently**, this minimizes operational compute costs and accelerates development iterations.
+## How I’m gonna do it (I hope)
+I’m probably not going to teach them everything at once because they'll just hit walls and die for hours, which sounds like a mess. My plan is to start them off with baby levels—like, just a straight line with some dots—before I add the ghosts to scare them. I also need to figure out how to save their progress so my PC doesn't have to stay on for a week straight. I heard the DQN has a bad memory, so I'll probably have to add a "replay" button for it too.
 
-### **3. Evaluation and Expected Outcomes**
-* **Setup:** Standard evaluations often test agents on slight variations of training data, providing a false sense of capability and operational readiness.
-* **Action:** Both agents will be deployed into a fully complete, unseen Pac-Man map. Performance will be measured objectively by completion rates, high scores, and the empirical exploitation of game mechanics. 
-* **Result:** **It is evident that** this rigorous environment will expose true generalizability. **In contrast** to initial assumptions favoring DQN, this test will definitively establish whether NEAT's evolutionary topology offers a more robust operational solution for high-variance tasks.
+## What I want to see
+Instead of just testing them on the same map they practiced on (which is basically cheating), I’m gonna throw them into a totally random maze I built. I just want to see who can actually get a high score without me helping. I have a feeling one might be way better at handling weird maps, even though the other one sounds way cooler. At least then I’ll know which one isn't a total disaster.
