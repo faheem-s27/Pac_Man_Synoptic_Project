@@ -44,6 +44,12 @@ class GameEngine:
         self.pathfinding = Pathfinding(self.maze)
         self.show_path = True
 
+        # Lives system
+        self.lives = 3
+        self.game_state = GameState.GAME
+        self.life_lost_timer = 0
+        self.life_lost_duration = 3 * 60  # 3 seconds at 60 FPS
+
         self.pellet_sound = None
         try:
             self.pellet_sound = pygame.mixer.Sound("../Audio/pacman_chomp.wav")
@@ -52,6 +58,38 @@ class GameEngine:
 
     def unpause(self):
         self.paused = False
+
+    def _reset_positions(self):
+        """Reset Pac-Man and ghosts to their starting positions after a life is lost."""
+        pacman_x, pacman_y = self._find_safe_spawn_bottom_center()
+        self.pacman.x = pacman_x
+        self.pacman.y = pacman_y
+        self.pacman.direction = (0, 0)
+
+        if self.enable_ghosts:
+            cage_center_x = (self.maze.width // 2) * self.tile_size
+            cage_center_y = (self.maze.height // 2) * self.tile_size
+
+            if len(self.ghosts) > 0:
+                # Reset Blinky
+                self.ghosts[0].x = cage_center_x + self.ghosts[0].offset
+                self.ghosts[0].y = cage_center_y + self.ghosts[0].offset
+                self.ghosts[0].current_dir = (0, 0)
+            if len(self.ghosts) > 1:
+                # Reset Pinky
+                self.ghosts[1].x = cage_center_x + self.tile_size + self.ghosts[1].offset
+                self.ghosts[1].y = cage_center_y + self.ghosts[1].offset
+                self.ghosts[1].current_dir = (0, 0)
+            if len(self.ghosts) > 2:
+                # Reset Clyde
+                self.ghosts[2].x = cage_center_x - self.tile_size + self.ghosts[2].offset
+                self.ghosts[2].y = cage_center_y + self.ghosts[2].offset
+                self.ghosts[2].current_dir = (0, 0)
+            if len(self.ghosts) > 3:
+                # Reset Inky
+                self.ghosts[3].x = cage_center_x + self.ghosts[3].offset
+                self.ghosts[3].y = cage_center_y + self.tile_size + self.ghosts[3].offset
+                self.ghosts[3].current_dir = (0, 0)
 
     def _find_safe_spawn_bottom_center(self):
         center_x = self.maze.width // 2
@@ -71,28 +109,24 @@ class GameEngine:
         # Blinky (Red) - targets Pac-Man directly
         blinky = Ghost(cage_center_x, cage_center_y, self.tile_size, speed=2, maze=self.maze, name="Blinky")
         blinky.color = (255, 0, 0)
-        blinky.state = GhostState.CHASE
         self.ghosts.append(blinky)
 
         # Pinky (Pink) - targets 4 tiles ahead of Pac-Man
         # Spawn slightly offset from Blinky
         pinky = Pinky(cage_center_x + self.tile_size, cage_center_y, self.tile_size, speed=2, maze=self.maze, name="Pinky")
         pinky.color = (255, 184, 255)  # Pink color
-        pinky.state = GhostState.CHASE
         self.ghosts.append(pinky)
 
         # Clyde (Orange) - chases Pac-Man but retreats when within 8 tiles
         # Spawn on the other side
         clyde = Clyde(cage_center_x - self.tile_size, cage_center_y, self.tile_size, speed=2, maze=self.maze, name="Clyde")
         clyde.color = (255, 184, 82)  # Orange color
-        clyde.state = GhostState.CHASE
         self.ghosts.append(clyde)
 
         # Inky (Cyan) - targets based on vector from Blinky
         # Spawn below Blinky, pass Blinky reference for targeting
         inky = Inky(cage_center_x, cage_center_y + self.tile_size, self.tile_size, speed=2, maze=self.maze, name="Inky", blinky=blinky)
         inky.color = (0, 255, 255)  # Cyan color
-        inky.state = GhostState.CHASE
         self.ghosts.append(inky)
 
     def _initialize_pellets(self):
@@ -124,6 +158,20 @@ class GameEngine:
             elif event.key == pygame.K_p: self.show_path = not self.show_path
 
     def update(self):
+        # Handle life lost timer and state transitions
+        if self.game_state == GameState.AUDIO_PLAYING:
+            self.life_lost_timer += 1
+            if self.life_lost_timer >= self.life_lost_duration:
+                # Transition back to GAME state
+                if self.lives > 0:
+                    self.game_state = GameState.GAME
+                    self.life_lost_timer = 0
+                else:
+                    # No more lives, game over
+                    self.game_over = True
+                    self.game_state = GameState.GAME_OVER
+            return
+
         if self.game_over or self.won or self.paused:
             return
 
@@ -151,6 +199,26 @@ class GameEngine:
         if not self.pellets:
             self.won = True
 
+        # Check ghost collision
+        for ghost in self.ghosts:
+            ghost_center_x = ghost.x + ghost.size // 2
+            ghost_center_y = ghost.y + ghost.size // 2
+            distance_sq = (pacman_x - ghost_center_x) ** 2 + (pacman_y - ghost_center_y) ** 2
+
+            # Collision threshold: use tile_size / 2 as collision radius
+            if distance_sq < collision_sq_threshold:
+                # Lose a life
+                self.lives -= 1
+                if self.lives <= 0:
+                    self.game_over = True
+                    self.game_state = GameState.GAME_OVER
+                else:
+                    # Enter AUDIO_PLAYING state for 3 seconds
+                    self.game_state = GameState.AUDIO_PLAYING
+                    self.life_lost_timer = 0
+                    self._reset_positions()
+                break  # Only process one collision per frame
+
     def draw(self, surface):
         self.maze.draw(surface)
 
@@ -170,6 +238,7 @@ class GameEngine:
         font = pygame.font.Font(None, 32)
         surface.blit(font.render(f"Score: {self.pacman.score}", True, (255, 255, 255)), (10, 10))
         surface.blit(font.render(f"Pellets: {len(self.pellets)}", True, (255, 255, 255)), (self.screen_width - 250, 10))
+        surface.blit(font.render(f"Lives: {self.lives}", True, (255, 255, 255)), (self.screen_width - 250, 50))
 
         # if self.paused and not (self.game_over or self.won):
         #     pause_text = font.render("PAUSED", True, (255, 255, 0))

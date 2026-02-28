@@ -10,8 +10,15 @@ class GhostState(Enum):
     FRIGHTENED = 4
 
 
+def _get_opposite_dir(direction):
+    """Returns the inverse vector to identify 180-degree turns."""
+    return -direction[0], -direction[1]  #
+
+
 class Ghost:
     PATH_RECALC_FRAMES = 10
+    SCATTER_DURATION = 10 * 60
+    CHASE_DURATION = 20 * 60
 
     def __init__(self, x, y, tile_size=40, speed=2, maze=None, name="Ghost"):
         self.tile_size = tile_size
@@ -24,124 +31,112 @@ class Ghost:
         self.x = float(x + self.offset)
         self.y = float(y + self.offset)
 
-        # Track current direction vector to prevent 180-degree reversals
         self.current_dir = (0, 0)
-        self.state = GhostState.CHASE
+        self.state = GhostState.SCATTER
         self.pathfinding = Pathfinding(maze)
         self.path = []
         self.path_index = 0
         self.path_update_counter = 0
         self.color = None
 
+        self.mode_timer = 0
+        self.is_scatter = True
+
     @property
     def grid_pos(self):
-        """Returns the grid indices based on the true center of the ghost."""
         center_x = self.x + self.size / 2
         center_y = self.y + self.size / 2
         return int(center_x // self.tile_size), int(center_y // self.tile_size)
 
-    def _get_opposite_dir(self, direction):
-        """Returns the inverse vector to identify 180-degree turns."""
-        return -direction[0], -direction[1]
+    def is_at_center(self):
+        """Strict check for tile center alignment."""
+        tolerance = self.speed
+        return (abs((self.x - self.offset) % self.tile_size) <= tolerance and
+                abs((self.y - self.offset) % self.tile_size) <= tolerance)
 
     def update(self, pacman):
-        match self.state:
-            case GhostState.CHASE:
-                self._update_chase(pacman)
+        self.mode_timer += 1
 
-    def get_target_tile(self, pacman):
-        """Default Blinky behavior: target Pac-Man's tile."""
-        p_center_x = pacman.x + pacman.size / 2
-        p_center_y = pacman.y + pacman.size / 2
-        return int(p_center_x // self.tile_size), int(p_center_y // self.tile_size)
+        # Only switch modes at intersections to prevent pathing glitches
+        if self.is_at_center():
+            if self.is_scatter and self.mode_timer >= self.SCATTER_DURATION:
+                self.is_scatter = False
+                self.state = GhostState.CHASE
+                self.mode_timer = 0
+                self.path = []
+            elif not self.is_scatter and self.mode_timer >= self.CHASE_DURATION:
+                self.is_scatter = True
+                self.state = GhostState.SCATTER
+                self.mode_timer = 0
+                self.path = []
 
-    def _update_chase(self, pacman):
+        self._execute_state_logic(pacman)
+
+    def _execute_state_logic(self, pacman):
+        """Modified to handle path exhaustion by forcing momentum."""
         self.path_update_counter += 1
 
-        # Allow path recalculation every N frames
-        if self.path_update_counter >= self.PATH_RECALC_FRAMES:
-            start_gx, start_gy = self.grid_pos
-            target_gx, target_gy = self.get_target_tile(pacman)
+        target_gx, target_gy = (self.get_scatter_target_tile() if self.is_scatter
+                                else self.get_target_tile(pacman))
 
-            self.path = self.pathfinding.find_shortest_path(
-                start_gx, start_gy, target_gx, target_gy, self.current_dir
-            )
-            self.path_index = 0
+        # Check if we've arrived at the target tile
+        current_gx, current_gy = self.grid_pos
+        arrived_at_target = (current_gx == target_gx and current_gy == target_gy)
+
+        # Pathfinding update: only if we aren't already at the target
+        if self.path_update_counter >= self.PATH_RECALC_FRAMES and self.is_at_center():
+            if not arrived_at_target:
+                self.path = self.pathfinding.find_shortest_path(
+                    current_gx, current_gy, target_gx, target_gy, self.current_dir
+                )
+                self.path_index = 0
+            else:
+                # If at target, clear path to let momentum/intersection logic take over
+                self.path = []
             self.path_update_counter = 0
 
-        # Execute path movement or forced momentum
+        # Movement implementation
         if self.path and self.path_index < len(self.path):
             next_tile = self.path[self.path_index]
             self._move_towards(next_tile[0] * self.tile_size + self.offset,
                                next_tile[1] * self.tile_size + self.offset)
         else:
-            # Result: Constant motion prevents the ghost from stopping at the target
-            self._continue_forward()
+            # Result: Force movement even when the A* path is empty
+            self._apply_intersection_logic()
 
-    def _continue_forward(self):
-        """Forces the ghost to maintain its current heading until it hits a wall."""
-        if self.current_dir == (0, 0):
-            # Fallback: Pick first available non-wall direction
+    def _apply_intersection_logic(self):
+        """Forced turn logic when at an intersection with no path."""
+        if self.is_at_center():
+            # Get available directions excluding the 180-degree reversal
+            opposite = _get_opposite_dir(self.current_dir)
+            valid_dirs = []
+
             for d in [(0, -1), (0, 1), (-1, 0), (1, 0)]:
-                if self.maze.can_move(self.x + d[0] * self.speed, self.y + d[1] * self.speed, self.size):
-                    self.current_dir = d
-                    break
-            # After setting direction, try to move
-            if self.current_dir != (0, 0):
-                next_x = self.x + self.current_dir[0] * self.speed
-                next_y = self.y + self.current_dir[1] * self.speed
+                if d == opposite and self.current_dir != (0, 0):
+                    continue
+
+                # Check if the next tile in this direction is a wall
+                next_x = self.x + d[0] * self.speed
+                next_y = self.y + d[1] * self.speed
                 if self.maze.can_move(next_x, next_y, self.size):
-                    self.x, self.y = next_x, next_y
-            return
+                    valid_dirs.append(d)
 
-        next_x = self.x + self.current_dir[0] * self.speed
-        next_y = self.y + self.current_dir[1] * self.speed
+            if valid_dirs:
+                # If we can keep going straight, do so; otherwise pick a turn
+                if self.current_dir in valid_dirs:
+                    pass
+                else:
+                    import random
+                    self.current_dir = random.choice(valid_dirs)
+            else:
+                # Absolute dead end: 180-degree turn as last resort
+                self.current_dir = opposite
 
-        if self.maze.can_move(next_x, next_y, self.size):
-            self.x, self.y = next_x, next_y
-        else:
-            # Hit a wall? Try perpendicular directions
-            perpendicular_dirs = []
-            if self.current_dir[0] != 0:  # Moving horizontally, try vertical
-                perpendicular_dirs = [(0, -1), (0, 1)]
-            else:  # Moving vertically, try horizontal
-                perpendicular_dirs = [(-1, 0), (1, 0)]
-
-            found_dir = False
-            for d in perpendicular_dirs:
-                test_x = self.x + d[0] * self.speed
-                test_y = self.y + d[1] * self.speed
-                if self.maze.can_move(test_x, test_y, self.size):
-                    self.current_dir = d
-                    self.x, self.y = test_x, test_y
-                    found_dir = True
-                    break
-
-            if not found_dir:
-                # Can't move in any direction, force path recalculation
-                self.path_update_counter = self.PATH_RECALC_FRAMES
-
-    def _move_forward_until_intersection(self):
-        """Forces the ghost forward and prevents stopping/bouncing at the target."""
-        if self.current_dir == (0, 0):
-            # Fallback if ghost is somehow static: pick any direction that isn't a wall
-            for d in [(0, -1), (0, 1), (-1, 0), (1, 0)]:
-                if self.maze.can_move(self.x + d[0] * self.speed, self.y + d[1] * self.speed, self.size):
-                    self.current_dir = d
-                    break
-            return
-
-        next_x = self.x + self.current_dir[0] * self.speed
-        next_y = self.y + self.current_dir[1] * self.speed
-
-        if self.maze.can_move(next_x, next_y, self.size):
-            self.x, self.y = next_x, next_y
-        else:
-            # If we hit a wall while moving forward, force a path recalculation
-            self.path_update_counter = self.PATH_RECALC_FRAMES
+        # Apply the movement
+        self.x += self.current_dir[0] * self.speed
+        self.y += self.current_dir[1] * self.speed
 
     def _move_towards(self, target_px_x, target_px_y):
-        """Standard clamped movement on one axis at a time."""
         dx = target_px_x - self.x
         dy = target_px_y - self.y
 
@@ -158,9 +153,14 @@ class Ghost:
             self.x, self.y = float(target_px_x), float(target_px_y)
             self.path_index += 1
 
-    def _move_forward_momentum(self):
-        """Forces the ghost forward into the wall to trigger a turn recalculation."""
-        if self.current_dir == (0, 0): return
+    def _apply_momentum(self):
+        """Unified forward momentum logic."""
+        if self.current_dir == (0, 0):
+            for d in [(0, -1), (0, 1), (-1, 0), (1, 0)]:
+                if self.maze.can_move(self.x + d[0], self.y + d[1], self.size):
+                    self.current_dir = d
+                    break
+            return
 
         next_x = self.x + self.current_dir[0] * self.speed
         next_y = self.y + self.current_dir[1] * self.speed
@@ -168,8 +168,16 @@ class Ghost:
         if self.maze.can_move(next_x, next_y, self.size):
             self.x, self.y = next_x, next_y
         else:
-            # Hit a dead end? Reset counter to find an available perpendicular turn.
+            # Hit a wall? Force turn check by resetting counter
             self.path_update_counter = self.PATH_RECALC_FRAMES
+
+    def get_target_tile(self, pacman):
+        p_center_x = pacman.x + pacman.size / 2
+        p_center_y = pacman.y + pacman.size / 2
+        return int(p_center_x // self.tile_size), int(p_center_y // self.tile_size)
+
+    def get_scatter_target_tile(self):
+        return self.maze.width - 2, 1  # Blinky top-right corner inside walls
 
     def draw(self, surface):
         if self.color:
@@ -180,73 +188,41 @@ class Pinky(Ghost):
     """Pink ghost - targets 4 tiles ahead of Pac-Man's current direction"""
 
     def get_target_tile(self, pacman):
-        """Target 4 tiles ahead of Pac-Man, decreasing to 3, 2, 1 if hitting walls"""
-        p_center_x = pacman.x + pacman.size / 2
-        p_center_y = pacman.y + pacman.size / 2
+        p_gx, p_gy = pacman.get_grid_position()
 
-        # Get Pac-Man's current grid position
-        pacman_gx = int(p_center_x // self.tile_size)
-        pacman_gy = int(p_center_y // self.tile_size)
+        # Calculate 4 tiles ahead based on current heading
+        target_gx = p_gx + (pacman.direction[0] // pacman.speed) * 4
+        target_gy = p_gy + (pacman.direction[1] // pacman.speed) * 4
 
-        # Try 4 tiles ahead, then 3, then 2, then 1 if hitting walls
-        for distance in range(4, 0, -1):
-            # Calculate offset based on Pac-Man's direction
-            # pacman.direction is a unit vector (like (0, -1) or (1, 0))
-            offset_x = int(pacman.direction[0] * distance)
-            offset_y = int(pacman.direction[1] * distance)
+        # Standardize: Clamp to maze interior to avoid targeting border walls
+        target_gx = max(1, min(target_gx, self.maze.width - 2))
+        target_gy = max(1, min(target_gy, self.maze.height - 2))
 
-            target_gx = pacman_gx + offset_x
-            target_gy = pacman_gy + offset_y
+        return int(target_gx), int(target_gy)
 
-            # Check if within maze bounds
-            if 0 <= target_gx < self.maze.width and 0 <= target_gy < self.maze.height:
-                # If this tile is not a wall, use it as target
-                if not self.maze.is_wall(target_gx, target_gy):
-                    return target_gx, target_gy
-
-        # If all ahead tiles are walls, fall back to Pac-Man's position
-        return pacman_gx, pacman_gy
+    def get_scatter_target_tile(self):
+        # Targets the top-left corner area
+        return 1, 1
 
 
 class Clyde(Ghost):
     """Orange ghost - chases Pac-Man, but retreats to bottom-left when within 8 tiles"""
 
     def get_target_tile(self, pacman):
-        """Target Pac-Man unless within 8 tiles, then target bottom-left corner"""
-        p_center_x = pacman.x + pacman.size / 2
-        p_center_y = pacman.y + pacman.size / 2
+        p_gx, p_gy = pacman.get_grid_position()
+        c_gx, c_gy = self.grid_pos
 
-        # Get Pac-Man's current grid position
-        pacman_gx = int(p_center_x // self.tile_size)
-        pacman_gy = int(p_center_y // self.tile_size)
+        # Manhattan Distance: |x1 - x2| + |y1 - y2|
+        distance = abs(p_gx - c_gx) + abs(p_gy - c_gy)
 
-        # Get Clyde's current grid position
-        clyde_gx, clyde_gy = self.grid_pos
-
-        # Calculate distance to Pac-Man (Manhattan distance)
-        distance = abs(clyde_gx - pacman_gx) + abs(clyde_gy - pacman_gy)
-
-        # If within 8 tiles, retreat to bottom-left corner
-        if distance < 8:
-            # Target bottom-left corner
-            target_gx = 0
-            target_gy = self.maze.height - 1
-
-            # Find nearest valid tile in bottom-left area if exact corner is a wall
-            for offset in range(5):  # Try expanding search
-                for dx in range(offset + 1):
-                    for dy in range(offset + 1):
-                        test_x = target_gx + dx
-                        test_y = target_gy - dy
-                        if 0 <= test_x < self.maze.width and 0 <= test_y < self.maze.height:
-                            if not self.maze.is_wall(test_x, test_y):
-                                return test_x, test_y
-
-            # Fallback to Pac-Man's position if no valid corner found
-            return pacman_gx, pacman_gy
+        if distance > 8:
+            return p_gx, p_gy
         else:
-            # Chase Pac-Man directly (Blinky behavior)
-            return pacman_gx, pacman_gy
+            return self.get_scatter_target_tile()
+
+    def get_scatter_target_tile(self):
+        # Targets the bottom-left corner area
+        return 1, self.maze.height - 2
 
 
 class Inky(Ghost):
@@ -257,48 +233,25 @@ class Inky(Ghost):
         self.blinky = blinky
 
     def get_target_tile(self, pacman):
-        """
-        Inky's targeting algorithm:
-        1. Get point 2 tiles ahead of Pac-Man
-        2. Vector from Blinky to that point
-        3. Double that vector to get target
-        This creates unpredictable behavior dependent on Blinky's position
-        """
         if not self.blinky:
-            # Fallback to Blinky behavior if Blinky not set
-            p_center_x = pacman.x + pacman.size / 2
-            p_center_y = pacman.y + pacman.size / 2
-            return int(p_center_x // self.tile_size), int(p_center_y // self.tile_size)
+            return super().get_target_tile(pacman)
 
-        # Get Pac-Man's current grid position
-        p_center_x = pacman.x + pacman.size / 2
-        p_center_y = pacman.y + pacman.size / 2
-        pacman_gx = int(p_center_x // self.tile_size)
-        pacman_gy = int(p_center_y // self.tile_size)
+        # 1. Get 2 tiles ahead of Pac-Man
+        p_gx, p_gy = pacman.get_grid_position()
+        p_ahead_x = p_gx + (pacman.direction[0] // pacman.speed) * 2
+        p_ahead_y = p_gy + (pacman.direction[1] // pacman.speed) * 2
 
-        # Get point 2 tiles ahead of Pac-Man in his direction
-        offset_x = int(pacman.direction[0] * 2)
-        offset_y = int(pacman.direction[1] * 2)
-        offset_tile_x = pacman_gx + offset_x
-        offset_tile_y = pacman_gy + offset_y
+        # 2. Get vector from Blinky to that point
+        b_gx, b_gy = self.blinky.grid_pos
+        vec_x, vec_y = p_ahead_x - b_gx, p_ahead_y - b_gy
 
-        # Clamp to maze bounds
-        offset_tile_x = max(0, min(offset_tile_x, self.maze.width - 1))
-        offset_tile_y = max(0, min(offset_tile_y, self.maze.height - 1))
+        # 3. Double the vector
+        target_gx = b_gx + (vec_x * 2)
+        target_gy = b_gy + (vec_y * 2)
 
-        # Get Blinky's grid position
-        blinky_gx, blinky_gy = self.blinky.grid_pos
+        return (max(1, min(int(target_gx), self.maze.width - 2)),
+                max(1, min(int(target_gy), self.maze.height - 2)))
 
-        # Calculate vector from Blinky to the offset tile
-        vec_x = offset_tile_x - blinky_gx
-        vec_y = offset_tile_y - blinky_gy
-
-        # Double the vector to get target
-        target_gx = offset_tile_x + vec_x
-        target_gy = offset_tile_y + vec_y
-
-        # Clamp to maze bounds
-        target_gx = max(0, min(target_gx, self.maze.width - 1))
-        target_gy = max(0, min(target_gy, self.maze.height - 1))
-
-        return target_gx, target_gy
+    def get_scatter_target_tile(self):
+        # Targets the bottom-right corner area
+        return self.maze.width - 2, self.maze.height - 2
