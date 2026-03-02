@@ -1,13 +1,13 @@
 {
   "screen_width": 800,
   "screen_height": 800,
-  "tile_size": 40,
+  "tile_size": 30,
   "pacman_speed": 2,
-  "ghost_speed": 1.9,
+  "ghost_speed": 3,
   "use_classic_maze": false,
   "maze_algorithm": "recursive_backtracking",
   "enable_ghosts": true,
   "lives": 3,
-  "god_mode": false,
-  "window_resolution": "1000x800"
+  "god_mode": true,
+  "window_resolution": "1200x1000"
 }
