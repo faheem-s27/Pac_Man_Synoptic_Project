@@ -82,14 +82,18 @@ class GameEngine:
         self.chase_duration = 20 * 60     # 20 seconds at 60 FPS
         self.global_scatter_mode = True   # Start in scatter mode
 
-        self.pellet_sound = None
+        self.pellet_sounds = []
+        self.pellet_sound_index = 0
         self.pellet_channel = None  # Dedicated channel for pellet sounds
         self.death_sound = None
         self.death_channel = None  # Dedicated channel for death sound
         self.eatghost_sound = None
         self.eatghost_channel = None  # Dedicated channel for eating ghost sound
         try:
-            self.pellet_sound = pygame.mixer.Sound("../Audio/pacman_chomp.wav")
+            self.pellet_sounds = [
+                pygame.mixer.Sound("../Audio/eat_dot_0.wav"),
+                pygame.mixer.Sound("../Audio/eat_dot_1.wav"),
+            ]
             self.pellet_channel = pygame.mixer.Channel(0)  # Use channel 0 for pellets
         except Exception as e:
             print(f"Audio Warning (pellet): {e}")
@@ -391,10 +395,11 @@ class GameEngine:
             distance_sq = (pacman_x - px) ** 2 + (pacman_y - py) ** 2
             if distance_sq < collision_sq_threshold:
                 self.pacman.eat_pellet(10)
-                # Play chomp sound only if channel is not busy (prevents overlapping)
-                if self.pellet_sound and self.pellet_channel:
-                    if not self.pellet_channel.get_busy():
-                        self.pellet_channel.play(self.pellet_sound)
+                # Play alternating pellet sounds only if channel is not busy
+                if self.pellet_sounds and self.pellet_channel and not self.pellet_channel.get_busy():
+                    sound = self.pellet_sounds[self.pellet_sound_index % len(self.pellet_sounds)]
+                    self.pellet_channel.play(sound)
+                    self.pellet_sound_index += 1
                 pellets_to_remove.append(i)
 
         for i in reversed(pellets_to_remove):
