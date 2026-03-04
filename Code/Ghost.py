@@ -1,5 +1,6 @@
 import pygame
 from enum import Enum
+from PIL import Image
 from Code.Pathfinding import Pathfinding
 import os
 
@@ -19,12 +20,16 @@ def _get_opposite_dir(direction):
 
 class Ghost:
     PATH_RECALC_FRAMES = 10
-    SCATTER_DURATION = 10 * 60
-    CHASE_DURATION = 20 * 60
+    SCATTER_DURATION = 7 * 60
+    CHASE_DURATION = 25 * 60
+    ANIMATION_FRAME_DELAY = 6  # 60 FPS / 6 ~= 10 animation frames per second
+    VISUAL_SCALE = 0.82
 
     def __init__(self, x, y, tile_size=40, speed=2, maze=None, name="Ghost"):
         self.tile_size = tile_size
         self.size = tile_size
+        self.render_size = max(8, int(self.size * self.VISUAL_SCALE))
+        self.render_offset = (self.size - self.render_size) // 2
         self.speed = speed
         self.original_speed = speed  # Store original speed for restoration
         self.maze = maze
@@ -59,26 +64,48 @@ class Ghost:
         self.cage_y = None
         self.eaten_speed = speed * 2  # Move faster when returning to cage
 
-        # Load Blinky images if this is Blinky
-        self.blinky_images = {}
-        if self.name == "Blinky":
-            self._load_blinky_images()
+        # Load ghost images if they exist
+        self.ghost_images = {}
+        self.animation_counter = 0
+        self._load_ghost_images()
 
-    def _load_blinky_images(self):
-        """Load Blinky directional images."""
+    def _load_ghost_images(self):
+        """Load directional GIF images for this ghost and extract all frames."""
         directions = ["up", "down", "left", "right"]
+        ghost_name = self.name.lower()
+
         for direction in directions:
             try:
-                image_path = f"../Images/blinky_{direction}.gif"
-                image = pygame.image.load(image_path)
-                # Scale image to match tile size
-                image = pygame.transform.scale(image, (self.tile_size, self.tile_size))
-                self.blinky_images[direction] = image
-            except Exception as e:
-                print(f"Warning: Could not load Blinky {direction} image: {e}")
+                gif_path = f"../Images/{ghost_name}_{direction}.gif"
+                frames = []
 
-    def _get_blinky_direction_name(self):
-        """Determine which direction Blinky is currently facing."""
+                # Use PIL to extract frames from GIF
+                pil_image = Image.open(gif_path)
+
+                # Extract all frames from the GIF
+                frame_index = 0
+                while True:
+                    try:
+                        pil_image.seek(frame_index)
+                        # Convert PIL image to pygame surface
+                        frame = pil_image.convert("RGBA")
+                        # Convert PIL Image to pygame Surface
+                        frame_data = pygame.image.fromstring(frame.tobytes(), frame.size, "RGBA")
+                        # Scale to a slightly smaller visual size for wall gap readability
+                        frame_scaled = pygame.transform.scale(frame_data, (self.render_size, self.render_size))
+                        frames.append(frame_scaled)
+                        frame_index += 1
+                    except EOFError:
+                        break
+
+                if frames:
+                    self.ghost_images[direction] = frames
+                    print(f"Loaded {len(frames)} frames for {self.name} {direction} animation")
+            except Exception as e:
+                print(f"Note: Could not load {self.name} {direction} GIF: {e}")
+
+    def _get_current_direction_name(self):
+        """Determine which direction the ghost is currently facing."""
         dx, dy = self.current_dir
 
         if abs(dy) > abs(dx):  # Vertical movement
@@ -177,6 +204,9 @@ class Ghost:
                 self.path = []
 
     def update(self, pacman):
+        # Increment animation counter for GIF animation
+        self.animation_counter += 1
+
         # Handle spawning state
         if self.state == GhostState.SPAWNING:
             self.spawn_timer += 1
@@ -380,34 +410,30 @@ class Ghost:
 
         # Draw eaten ghosts (returning to cage) as eyes only
         if self.state == GhostState.EATEN:
-            # calculate their color and mute it by 50%
             muted = (int(self.color[0] * 0.5), int(self.color[1] * 0.5), int(self.color[2] * 0.5))
-            pygame.draw.circle(surface, muted, (int(center_x), int(center_y)), self.size // 4)
+            pygame.draw.circle(surface, muted, (int(center_x), int(center_y)), self.render_size // 4)
             return
 
-        # Only draw spawned ghosts normally
         if self.is_spawned and self.color:
-            # Draw Blinky with directional images
-            if self.name == "Blinky" and self.blinky_images:
-                direction = self._get_blinky_direction_name()
-                if direction in self.blinky_images:
-                    image = self.blinky_images[direction]
-                    surface.blit(image, (self.x, self.y))
+            if self.ghost_images:
+                direction = self._get_current_direction_name()
+                if direction in self.ghost_images and len(self.ghost_images[direction]) > 0:
+                    frames = self.ghost_images[direction]
+                    frame_index = (self.animation_counter // self.ANIMATION_FRAME_DELAY) % len(frames)
+                    image = frames[frame_index]
+                    surface.blit(image, (self.x + self.render_offset, self.y + self.render_offset))
                 else:
-                    # Fallback to circle if image not found
-                    pygame.draw.circle(surface, self.color, (int(center_x), int(center_y)), self.size // 3)
+                    pygame.draw.circle(surface, self.color, (int(center_x), int(center_y)), self.render_size // 3)
             else:
-                # Flash between blue and white when frightened and warning
                 if self.state == GhostState.FRIGHTENED and self.frightened_warning:
                     import time
-                    flash = int(time.time() * 6) % 2 == 0  # Flash 6 times per second
+                    flash = int(time.time() * 6) % 2 == 0
                     color = (255, 255, 255) if flash else (0, 0, 255)
-                    pygame.draw.circle(surface, color, (int(center_x), int(center_y)), self.size // 3)
+                    pygame.draw.circle(surface, color, (int(center_x), int(center_y)), self.render_size // 3)
                 else:
-                    pygame.draw.circle(surface, self.color, (int(center_x), int(center_y)), self.size // 3)
+                    pygame.draw.circle(surface, self.color, (int(center_x), int(center_y)), self.render_size // 3)
         elif not self.is_spawned:
-            # Draw spawning ghosts as dark gray
-            pygame.draw.circle(surface, (50, 50, 50), (int(center_x), int(center_y)), self.size // 3)
+            pygame.draw.circle(surface, (50, 50, 50), (int(center_x), int(center_y)), self.render_size // 3)
 
 
 class Pinky(Ghost):
