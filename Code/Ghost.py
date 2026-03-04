@@ -169,21 +169,46 @@ class Ghost:
             # Restore original speed
             self.speed = self.original_speed
 
+    def _get_valid_cage_tile(self):
+        """Pick a walkable tile near the configured cage target."""
+        if self.cage_x is None or self.cage_y is None:
+            return None
+
+        base_gx = int(self.cage_x // self.tile_size)
+        base_gy = int(self.cage_y // self.tile_size)
+
+        if (0 <= base_gx < self.maze.width and 0 <= base_gy < self.maze.height and
+                self.maze.maze[base_gy][base_gx] == 0):
+            return base_gx, base_gy
+
+        # Search outward in rings for the nearest walkable tile.
+        max_radius = 4
+        for radius in range(1, max_radius + 1):
+            for dy in range(-radius, radius + 1):
+                for dx in range(-radius, radius + 1):
+                    if abs(dx) + abs(dy) != radius:
+                        continue
+                    gx = base_gx + dx
+                    gy = base_gy + dy
+                    if 0 <= gx < self.maze.width and 0 <= gy < self.maze.height:
+                        if self.maze.maze[gy][gx] == 0:
+                            return gx, gy
+
+        return None
+
     def enter_eaten_mode(self):
         """Enter eaten mode - ghost returns to cage before respawning."""
         self.state = GhostState.EATEN
         self.path = []
         self.speed = self.eaten_speed  # Move faster when returning
 
-        # Calculate path from current position to cage
-        if self.cage_x is not None and self.cage_y is not None:
-            current_gx, current_gy = self.grid_pos
-            cage_gx = int(self.cage_x // self.tile_size)
-            cage_gy = int(self.cage_y // self.tile_size)
-
-            # Find path to cage (no direction restriction for eaten ghosts, no wraparound)
+        current_gx, current_gy = self.grid_pos
+        target_tile = self._get_valid_cage_tile()
+        if target_tile:
+            cage_gx, cage_gy = target_tile
+            # Allow wraparound so ghosts can always find a route from tunnel edges.
             self.path = self.pathfinding.find_shortest_path(
-                current_gx, current_gy, cage_gx, cage_gy, (0, 0), allow_wraparound=False
+                current_gx, current_gy, cage_gx, cage_gy, (0, 0), allow_wraparound=True
             )
             self.path_index = 0
 
@@ -312,22 +337,32 @@ class Ghost:
             next_tile = self.path[self.path_index]
             self._move_towards(next_tile[0] * self.tile_size + self.offset,
                                next_tile[1] * self.tile_size + self.offset)
-        else:
-            # Reached cage, transition to spawning state
-            current_gx, current_gy = self.grid_pos
-            cage_gx = int(self.cage_x // self.tile_size)
-            cage_gy = int(self.cage_y // self.tile_size)
+            return
 
-            # Check if we're at the cage
-            if current_gx == cage_gx and current_gy == cage_gy:
-                # Reset to spawning state
-                self.reset_spawn()
-            else:
-                # Recalculate path if needed (disable wraparound for eaten mode)
-                self.path = self.pathfinding.find_shortest_path(
-                    current_gx, current_gy, cage_gx, cage_gy, (0, 0), allow_wraparound=False
-                )
-                self.path_index = 0
+        current_gx, current_gy = self.grid_pos
+        target_tile = self._get_valid_cage_tile()
+
+        # If we cannot resolve a valid cage tile, keep moving instead of freezing.
+        if not target_tile:
+            self._apply_intersection_logic()
+            return
+
+        cage_gx, cage_gy = target_tile
+
+        # Check if we're at the cage
+        if current_gx == cage_gx and current_gy == cage_gy:
+            self.reset_spawn()
+            return
+
+        # Recalculate path if needed
+        self.path = self.pathfinding.find_shortest_path(
+            current_gx, current_gy, cage_gx, cage_gy, (0, 0), allow_wraparound=True
+        )
+        self.path_index = 0
+
+        # Defensive fallback: avoid standing still if no path was returned.
+        if not self.path:
+            self._apply_intersection_logic()
 
     def _apply_intersection_logic(self):
         """Forced turn logic when at an intersection with no path."""
