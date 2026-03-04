@@ -3,7 +3,7 @@
   "screen_height": 800,
   "tile_size": 30,
   "pacman_speed": 2,
-  "ghost_speed": 3,
+  "ghost_speed": 1.8,
   "use_classic_maze": false,
   "maze_algorithm": "recursive_backtracking",
   "enable_ghosts": true,
