@@ -87,8 +87,10 @@ class GameEngine:
         self.pellet_channel = None  # Dedicated channel for pellet sounds
         self.death_sound = None
         self.death_channel = None  # Dedicated channel for death sound
-        self.eatghost_sound = None
-        self.eatghost_channel = None  # Dedicated channel for eating ghost sound
+        self.ghost_turn_blue_sound = None
+        self.ghost_turn_blue_channel = None  # Dedicated channel for frightened entry sound
+        self.ghost_return_to_cage_sound = None
+        self.ghost_return_to_cage_channel = None  # Dedicated channel for ghost returning to cage
         try:
             self.pellet_sounds = [
                 pygame.mixer.Sound("../Audio/eat_dot_0.wav"),
@@ -105,10 +107,16 @@ class GameEngine:
             print(f"Audio Warning (death): {e}")
 
         try:
-            self.eatghost_sound = pygame.mixer.Sound("../Audio/pacman_eatghost.wav")
-            self.eatghost_channel = pygame.mixer.Channel(2)  # Use channel 2 for eating ghost
+            self.ghost_turn_blue_sound = pygame.mixer.Sound("../Audio/ghost_turn_blue.mp3")
+            self.ghost_turn_blue_channel = pygame.mixer.Channel(2)
         except Exception as e:
-            print(f"Audio Warning (eatghost): {e}")
+            print(f"Audio Warning (ghost turn blue): {e}")
+
+        try:
+            self.ghost_return_to_cage_sound = pygame.mixer.Sound("../Audio/ghost_return_to_cage.mp3")
+            self.ghost_return_to_cage_channel = pygame.mixer.Channel(3)
+        except Exception as e:
+            print(f"Audio Warning (ghost return to cage): {e}")
 
     def unpause(self):
         self.paused = False
@@ -419,6 +427,10 @@ class GameEngine:
                     self.frightened_timer = 0
                     self.ghosts_eaten_combo = 0  # Reset combo counter
 
+                    # Play frightened entry sound once per frightened cycle
+                    if self.ghost_turn_blue_sound and self.ghost_turn_blue_channel:
+                        self.ghost_turn_blue_channel.play(self.ghost_turn_blue_sound)
+
                     # Set all spawned ghosts to frightened state
                     for ghost in self.ghosts:
                         if ghost.is_spawned and ghost.state != GhostState.SPAWNING:
@@ -478,9 +490,9 @@ class GameEngine:
                     self.pacman.eat_pellet(ghost_points)
                     self.ghosts_eaten_combo += 1
 
-                    # Play eat ghost sound
-                    if self.eatghost_sound and self.eatghost_channel:
-                        self.eatghost_channel.play(self.eatghost_sound)
+                    # Play sound for ghost entering return-to-cage state
+                    if self.ghost_return_to_cage_sound and self.ghost_return_to_cage_channel:
+                        self.ghost_return_to_cage_channel.play(self.ghost_return_to_cage_sound)
 
                     # Enter eaten mode - ghost will return to cage then respawn
                     ghost.enter_eaten_mode()
