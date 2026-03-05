@@ -16,7 +16,11 @@ class Settings:
         "enable_ghosts": True,
         "lives": 3,
         "god_mode": False,
-        "window_resolution": "800x800"
+        "window_resolution": "800x800",
+        "max_pellets": -1,
+        "scatter_duration": 10,
+        "chase_duration": 20,
+        "always_chase": False
     }
 
     def __init__(self, settings_file="game_settings.json"):

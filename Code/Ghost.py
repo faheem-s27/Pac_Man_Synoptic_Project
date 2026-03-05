@@ -148,7 +148,8 @@ class Ghost:
         self.is_spawned = False
         self.current_dir = (0, 0)
         self.path = []
-        self.is_scatter = True  # Reset to scatter mode
+        # is_scatter is intentionally NOT reset here — the GameEngine sets it
+        # via sync_mode() after reset so always_chase is respected.
         # Restore original speed in case ghost was eaten while frightened
         self.speed = self.original_speed
         # Restore original color in case ghost was eaten while frightened
@@ -234,8 +235,9 @@ class Ghost:
             else:
                 self.state = GhostState.CHASE
 
-            # Clear path when mode changes
+            # Reverse direction and clear path when mode changes
             if old_mode != is_scatter:
+                self.current_dir = (-self.current_dir[0], -self.current_dir[1])
                 self.path = []
 
     def update(self, pacman):
@@ -246,9 +248,9 @@ class Ghost:
         if self.state == GhostState.SPAWNING:
             self.spawn_timer += 1
             if self.spawn_timer >= self.spawn_delay:
-                # Spawn complete, transition to scatter mode
+                # Spawn complete, transition to the current mode
                 self.is_spawned = True
-                self.state = GhostState.SCATTER
+                self.state = GhostState.SCATTER if self.is_scatter else GhostState.CHASE
                 self.spawn_timer = 0
             return  # Don't update while spawning
 

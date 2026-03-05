@@ -26,7 +26,9 @@ class GameEngine:
                  maze_algorithm="recursive_backtracking",
                  enable_ghosts=True, tile_size=40, lives=3,
                  window_resolution="800x800",
-                 god_mode=False):
+                 god_mode=False, max_pellets=-1,
+                 scatter_duration=10, chase_duration=20,
+                 always_chase=False, **kwargs):
         # Parse resolution string if provided
         if isinstance(window_resolution, str):
             screen_width, screen_height = parse_resolution(window_resolution)
@@ -37,6 +39,14 @@ class GameEngine:
         self.enable_ghosts = enable_ghosts
         self.ghost_speed = ghost_speed
         self.god_mode = god_mode
+        self.max_pellets = max_pellets  # -1 means unlimited
+
+        # Global scatter/chase mode — must be set before _initialize_ghosts
+        self.always_chase = always_chase
+        self.scatter_chase_timer = 0
+        self.scatter_duration = scatter_duration * 60   # Convert seconds to frames (60 FPS)
+        self.chase_duration = chase_duration * 60       # Convert seconds to frames (60 FPS)
+        self.global_scatter_mode = False if always_chase else True
 
         maze_width = (screen_width // self.tile_size)
         maze_height = (screen_height // self.tile_size)
@@ -53,6 +63,7 @@ class GameEngine:
         self.ghosts = []
         if self.enable_ghosts:
             self._initialize_ghosts()
+            self._sync_ghost_modes()  # Apply always_chase / initial scatter mode
 
         self.game_over = False
         self.won = False
@@ -76,11 +87,6 @@ class GameEngine:
         self.frightened_warning_threshold = 3 * 60  # Start flashing 3 seconds before end
         self.ghosts_eaten_combo = 0  # Track combo for increasing points
 
-        # Global scatter/chase mode timer (all ghosts switch together)
-        self.scatter_chase_timer = 0
-        self.scatter_duration = 10 * 60   # 10 seconds at 60 FPS
-        self.chase_duration = 20 * 60     # 20 seconds at 60 FPS
-        self.global_scatter_mode = True   # Start in scatter mode
 
         self.pellet_sounds = []
         self.pellet_sound_index = 0
@@ -138,7 +144,7 @@ class GameEngine:
 
         # Reset global scatter/chase timer
         self.scatter_chase_timer = 0
-        self.global_scatter_mode = True
+        self.global_scatter_mode = False if self.always_chase else True
 
         if self.enable_ghosts:
             cage_center_x = (self.maze.width // 2) * self.tile_size
@@ -164,6 +170,12 @@ class GameEngine:
                 self.ghosts[3].x = cage_center_x - self.tile_size + self.ghosts[3].offset
                 self.ghosts[3].y = cage_center_y + self.ghosts[3].offset
                 self.ghosts[3].reset_spawn()
+            self._sync_ghost_modes()  # Reapply always_chase / scatter mode after reset
+
+    def _sync_ghost_modes(self):
+        """Stamp the current global scatter/chase mode onto every ghost's is_scatter flag."""
+        for ghost in self.ghosts:
+            ghost.is_scatter = self.global_scatter_mode
 
     def _find_safe_spawn_bottom_center(self):
         center_x = self.maze.width // 2
@@ -246,6 +258,22 @@ class GameEngine:
                 if self.maze.maze[y][x] == 0:
                     pellets.append((x * self.tile_size + self.tile_size // 2,
                                    y * self.tile_size + self.tile_size // 2))
+
+        total_possible = len(pellets)
+
+        # Apply max_pellets cap (-1 = unlimited)
+        if self.max_pellets >= 0:
+            if self.max_pellets >= total_possible:
+                print(f"[Pellets] max_pellets ({self.max_pellets}) exceeds or equals max possible "
+                      f"({total_possible}). Placing all {total_possible} pellets.")
+            else:
+                print(f"[Pellets] Capping pellets at {self.max_pellets} (max possible: {total_possible}).")
+                # Spread them evenly by taking every nth pellet
+                step = total_possible / self.max_pellets
+                pellets = [pellets[int(i * step)] for i in range(self.max_pellets)]
+        else:
+            print(f"[Pellets] Placing all {total_possible} pellets (max_pellets = unlimited).")
+
         return pellets
 
     def _initialize_power_pellets(self):
@@ -378,7 +406,7 @@ class GameEngine:
             return
 
         # Update global scatter/chase timer (when not in frightened mode)
-        if not self.frightened_mode:
+        if not self.frightened_mode and not self.always_chase:
             self.scatter_chase_timer += 1
 
             # Switch modes globally for all ghosts
