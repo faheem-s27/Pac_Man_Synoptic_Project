@@ -21,7 +21,7 @@ class GameState(Enum):
     AUDIO_PLAYING = 5
 
 class GameEngine:
-    def __init__(self, screen_width=800, screen_height=800, pacman_speed=2, ghost_speed=2,
+    def __init__(self, screen_width=800, screen_height=800, pacman_speed=2, ghost_speed=-1,
                  paused=False, use_classic_maze=True,
                  maze_algorithm="recursive_backtracking",
                  enable_ghosts=True, tile_size=40, lives=3,
@@ -43,13 +43,18 @@ class GameEngine:
         self.max_pellets = max_pellets  # legacy, unused — kept for **kwargs safety
         self.pellets_to_win = pellets_to_win  # -1 = eat all pellets to win
         self.pellets_eaten_this_level = 0
+        self.pacman_speed = pacman_speed
 
         # Level system
         self.level = level
         self.ghost_speed_increment = ghost_speed_increment
-        self.base_ghost_speed = ghost_speed
+        # If ghost_speed is -1, derive it automatically as pacman_speed - 0.1
+        resolved_ghost_speed = (pacman_speed - 0.1) if ghost_speed < 0 else ghost_speed
+        self.base_ghost_speed = resolved_ghost_speed
         # Each level beyond 1 adds ghost_speed_increment to ghost speed
-        self.ghost_speed = ghost_speed + (level - 1) * ghost_speed_increment
+        self.ghost_speed = resolved_ghost_speed + (level - 1) * ghost_speed_increment
+        print(f"[Speed] Pac-Man: {pacman_speed}, Ghost base: {resolved_ghost_speed:.2f}, "
+              f"Level {level} ghost speed: {self.ghost_speed:.2f}")
 
         # Global scatter/chase mode — must be set before _initialize_ghosts
         self.always_chase = always_chase

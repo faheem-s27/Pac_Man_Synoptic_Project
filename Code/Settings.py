@@ -10,7 +10,7 @@ class Settings:
         "screen_height": 800,
         "tile_size": 20,
         "pacman_speed": 2,
-        "ghost_speed": 1.9,
+        "ghost_speed": -1,
         "use_classic_maze": False,
         "maze_algorithm": "recursive_backtracking",
         "enable_ghosts": True,

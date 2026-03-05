@@ -76,13 +76,27 @@ class PacMan:
         tile_offset_x = center_x % self.tile_size
         tile_offset_y = center_y % self.tile_size
 
-        # Tolerance is proportional to tile_size (not speed)
-        # This ensures smooth turning at any tile size and speed combination
-        # Larger tiles = larger tolerance for alignment
-        tolerance = max(self.tile_size // 10, 3)  # Min 3, scales with tile size
+        # Tolerance must be at least as large as speed so we never overshoot without triggering
+        tolerance = max(self.speed, self.tile_size // 10, 3)
 
         return (abs(tile_offset_x - self.tile_size // 2) < tolerance and
                 abs(tile_offset_y - self.tile_size // 2) < tolerance)
+
+    def _snap_to_axis(self):
+        """Snap Pac-Man's position along the non-moving axis to the nearest tile centre.
+        This prevents sub-pixel drift that blocks turns at non-divisible speeds."""
+        dx, dy = self.direction
+        half = self.tile_size // 2
+
+        if dx != 0:  # Moving horizontally — snap Y to tile centre
+            center_y = self.y + self.size // 2
+            snapped_tile_y = (center_y // self.tile_size) * self.tile_size + half
+            self.y = snapped_tile_y - self.size // 2
+
+        elif dy != 0:  # Moving vertically — snap X to tile centre
+            center_x = self.x + self.size // 2
+            snapped_tile_x = (center_x // self.tile_size) * self.tile_size + half
+            self.x = snapped_tile_x - self.size // 2
 
     def set_direction(self, direction):
         """Allow direction changes more freely - don't require perfect tile alignment"""
@@ -93,23 +107,75 @@ class PacMan:
     def update(self, maze):
         self.animation_counter += 1
 
-        if self.is_aligned_to_tile() and self.next_direction != (0, 0):
-            next_x = self.x + self.next_direction[0] * self.speed
-            next_y = self.y + self.next_direction[1] * self.speed
+        if self.next_direction != (0, 0):
+            is_reverse = (self.next_direction[0] == -self.direction[0] and
+                          self.next_direction[1] == -self.direction[1])
 
-            if maze.can_move(next_x, next_y, self.size):
+            if is_reverse:
+                # Reverse direction instantly — no tile alignment needed
                 self.direction = self.next_direction
                 self.next_direction = (0, 0)
+            elif self.is_aligned_to_tile():
+                # Snap to the tile centre first so the move check is clean
+                self._snap_to_axis()
+                next_x = self.x + self.next_direction[0] * self.speed
+                next_y = self.y + self.next_direction[1] * self.speed
 
-        next_x = self.x + self.direction[0] * self.speed
-        next_y = self.y + self.direction[1] * self.speed
+                if maze.can_move(next_x, next_y, self.size):
+                    self.direction = self.next_direction
+                    self.next_direction = (0, 0)
 
-        if maze.can_move(next_x, next_y, self.size):
-            self.x = next_x
-            self.y = next_y
+        # Move — but clamp each step so we never overshoot a tile centre
+        dx, dy = self.direction
+        if dx != 0:
+            # Moving horizontally: advance X, keep Y snapped
+            next_x = self.x + dx * self.speed
+            next_y = self.y
+            tile_half = self.tile_size // 2
+            if maze.can_move(next_x, next_y, self.size):
+                # Clamp: don't overshoot the next tile centre
+                center_x = self.x + self.size // 2
+                next_center_x = next_x + self.size // 2
+                tile_half = self.tile_size // 2
+                cur_offset = center_x % self.tile_size
+                nxt_offset = next_center_x % self.tile_size
+                # If we crossed the tile-centre boundary, snap to it
+                if (cur_offset < tile_half <= nxt_offset) or (cur_offset > tile_half >= nxt_offset):
+                    snapped = (center_x // self.tile_size) * self.tile_size + tile_half
+                    if abs(next_center_x - snapped) <= self.speed:
+                        next_x = snapped - self.size // 2
+                self.x = next_x
+            else:
+                # Snap to the tile centre so we sit flush against the wall
+                center_x = self.x + self.size // 2
+                snapped = (center_x // self.tile_size) * self.tile_size + tile_half
+                self.x = snapped - self.size // 2
 
-            # Handle teleportation at maze edges
-            self.x, self.y = maze.handle_teleportation(self.x, self.y)
+        elif dy != 0:
+            # Moving vertically: advance Y, keep X snapped
+            next_x = self.x
+            next_y = self.y + dy * self.speed
+            if maze.can_move(next_x, next_y, self.size):
+                # Clamp: don't overshoot the next tile centre
+                center_y = self.y + self.size // 2
+                next_center_y = next_y + self.size // 2
+                tile_half = self.tile_size // 2
+                cur_offset = center_y % self.tile_size
+                nxt_offset = next_center_y % self.tile_size
+                if (cur_offset < tile_half <= nxt_offset) or (cur_offset > tile_half >= nxt_offset):
+                    snapped = (center_y // self.tile_size) * self.tile_size + tile_half
+                    if abs(next_center_y - snapped) <= self.speed:
+                        next_y = snapped - self.size // 2
+                self.y = next_y
+            else:
+                # Snap to the tile centre so we sit flush against the wall
+                center_y = self.y + self.size // 2
+                tile_half = self.tile_size // 2
+                snapped = (center_y // self.tile_size) * self.tile_size + tile_half
+                self.y = snapped - self.size // 2
+
+        # Handle teleportation at maze edges
+        self.x, self.y = maze.handle_teleportation(self.x, self.y)
 
     def draw(self, surface):
         center_x = self.x + self.size // 2
