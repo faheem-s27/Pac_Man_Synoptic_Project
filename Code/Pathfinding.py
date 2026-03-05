@@ -74,22 +74,14 @@ class Pathfinding:
                 neighbor = (cx + dx, cy + dy)
 
                 if 0 <= neighbor[0] < self.maze.width and 0 <= neighbor[1] < self.maze.height:
-                    if self.maze.maze[neighbor[1]][neighbor[0]] == 0:
+                    if hasattr(self.maze, 'is_ghost_wall'):
+                        passable = not self.maze.is_ghost_wall(neighbor[0], neighbor[1])
+                    else:
+                        passable = self.maze.maze[neighbor[1]][neighbor[0]] == 0
+                    if passable:
                         neighbors.append(neighbor)
 
-            # Add wraparound neighbors if on teleport row AND wraparound is allowed
-            if allow_wraparound and teleport_row is not None and cy == teleport_row:
-                # Left wraparound: if at left edge, can go to right edge
-                if cx == 0:
-                    wrap_neighbor = (self.maze.width - 1, cy)
-                    if self.maze.maze[wrap_neighbor[1]][wrap_neighbor[0]] == 0:
-                        neighbors.append(wrap_neighbor)
-
-                # Right wraparound: if at right edge, can go to left edge
-                if cx == self.maze.width - 1:
-                    wrap_neighbor = (0, cy)
-                    if self.maze.maze[wrap_neighbor[1]][wrap_neighbor[0]] == 0:
-                        neighbors.append(wrap_neighbor)
+            # No wraparound — teleport tunnels are disabled
 
             # Process all neighbors
             for neighbor in neighbors:

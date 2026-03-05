@@ -187,26 +187,31 @@ class GameEngine:
         self.pacman.next_direction = (0, 0)
 
         if self.enable_ghosts:
-            cage_center_x = (self.maze.width // 2) * self.tile_size
-            cage_center_y = (self.maze.height // 2) * self.tile_size
+            ts = self.tile_size
+            m  = self.maze
+            interior_py = (m.cage_top + 1) * ts
+            interior_centre_x = (m.cage_left + m.cage_right) // 2
+            blinky_px = float(m.door_x * ts)
+            blinky_py = float((m.cage_top - 1) * ts)
+
             for ghost in self.ghosts:
                 ghost.maze = self.maze
                 ghost.pathfinding = Pathfinding(self.maze)
             if len(self.ghosts) > 0:
-                self.ghosts[0].x = cage_center_x + self.ghosts[0].offset
-                self.ghosts[0].y = cage_center_y + self.ghosts[0].offset
+                self.ghosts[0].x = blinky_px
+                self.ghosts[0].y = blinky_py
                 self.ghosts[0].reset_spawn()
             if len(self.ghosts) > 1:
-                self.ghosts[1].x = cage_center_x + self.tile_size + self.ghosts[1].offset
-                self.ghosts[1].y = cage_center_y + self.ghosts[1].offset
+                self.ghosts[1].x = float(interior_centre_x * ts)
+                self.ghosts[1].y = float(interior_py)
                 self.ghosts[1].reset_spawn()
             if len(self.ghosts) > 2:
-                self.ghosts[2].x = cage_center_x + self.ghosts[2].offset
-                self.ghosts[2].y = cage_center_y + self.tile_size + self.ghosts[2].offset
+                self.ghosts[2].x = float((interior_centre_x - 1) * ts)
+                self.ghosts[2].y = float(interior_py)
                 self.ghosts[2].reset_spawn()
             if len(self.ghosts) > 3:
-                self.ghosts[3].x = cage_center_x - self.tile_size + self.ghosts[3].offset
-                self.ghosts[3].y = cage_center_y + self.ghosts[3].offset
+                self.ghosts[3].x = float((interior_centre_x + 1) * ts)
+                self.ghosts[3].y = float(interior_py)
                 self.ghosts[3].reset_spawn()
             self._sync_ghost_modes()
 
@@ -224,28 +229,30 @@ class GameEngine:
         self.global_scatter_mode = False if self.always_chase else True
 
         if self.enable_ghosts:
-            cage_center_x = (self.maze.width // 2) * self.tile_size
-            cage_center_y = (self.maze.height // 2) * self.tile_size
+            ts = self.tile_size
+            m  = self.maze
+            interior_py = (m.cage_top + 1) * ts
+            interior_centre_x = (m.cage_left + m.cage_right) // 2
 
             if len(self.ghosts) > 0:
-                # Reset Blinky
-                self.ghosts[0].x = cage_center_x + self.ghosts[0].offset
-                self.ghosts[0].y = cage_center_y + self.ghosts[0].offset
+                # Reset Blinky — above door
+                self.ghosts[0].x = float(m.door_x * ts)
+                self.ghosts[0].y = float((m.cage_top - 1) * ts)
                 self.ghosts[0].reset_spawn()
             if len(self.ghosts) > 1:
-                # Reset Pinky
-                self.ghosts[1].x = cage_center_x + self.tile_size + self.ghosts[1].offset
-                self.ghosts[1].y = cage_center_y + self.ghosts[1].offset
+                # Reset Pinky — cage interior centre
+                self.ghosts[1].x = float(interior_centre_x * ts)
+                self.ghosts[1].y = float(interior_py)
                 self.ghosts[1].reset_spawn()
             if len(self.ghosts) > 2:
-                # Reset Inky
-                self.ghosts[2].x = cage_center_x + self.ghosts[2].offset
-                self.ghosts[2].y = cage_center_y + self.tile_size + self.ghosts[2].offset
+                # Reset Inky — left of centre
+                self.ghosts[2].x = float((interior_centre_x - 1) * ts)
+                self.ghosts[2].y = float(interior_py)
                 self.ghosts[2].reset_spawn()
             if len(self.ghosts) > 3:
-                # Reset Clyde
-                self.ghosts[3].x = cage_center_x - self.tile_size + self.ghosts[3].offset
-                self.ghosts[3].y = cage_center_y + self.ghosts[3].offset
+                # Reset Clyde — right of centre
+                self.ghosts[3].x = float((interior_centre_x + 1) * ts)
+                self.ghosts[3].y = float(interior_py)
                 self.ghosts[3].reset_spawn()
             self._sync_ghost_modes()  # Reapply always_chase / scatter mode after reset
 
@@ -266,75 +273,84 @@ class GameEngine:
         return self.tile_size, self.tile_size
 
     def _initialize_ghosts(self):
-        cage_center_x = (self.maze.width // 2) * self.tile_size
-        cage_center_y = (self.maze.height // 2) * self.tile_size
+        ts = self.tile_size
+        m  = self.maze
 
-        # Blinky (Red) - targets Pac-Man directly - spawns immediately
-        blinky = Ghost(cage_center_x, cage_center_y, self.tile_size, speed=self.ghost_speed, maze=self.maze, name="Blinky")
-        blinky.color = (255, 0, 0)
-        blinky.spawn_delay = 0  # Spawns immediately
-        blinky.cage_x = cage_center_x
-        blinky.cage_y = cage_center_y
+        # Blinky starts just ABOVE the door (outside the cage) — exits immediately
+        blinky_gx = m.door_x
+        blinky_gy = m.cage_top - 1          # one tile above the door
+        blinky_px = blinky_gx * ts
+        blinky_py = blinky_gy * ts
+
+        # Interior ghosts sit on the single interior row of the cage
+        interior_y  = m.cage_top + 1        # the open row inside the cage
+        interior_py = interior_y * ts
+
+        # Centre the three interior ghosts across the cage interior
+        # cage is 6 wide, interior is 4 wide (cage_left+1 .. cage_right-1)
+        interior_centre_x = (m.cage_left + m.cage_right) // 2
+        pinky_gx  = interior_centre_x
+        inky_gx   = interior_centre_x - 1
+        clyde_gx  = interior_centre_x + 1
+
+        pinky_px  = pinky_gx  * ts
+        inky_px   = inky_gx   * ts
+        clyde_px  = clyde_gx  * ts
+
+        # Return-to-cage target: interior centre
+        cage_home_px = interior_centre_x * ts
+        cage_home_py = interior_py
+
+        # Blinky (Red) — spawns immediately, starts above cage
+        blinky = Ghost(blinky_px, blinky_py, ts, speed=self.ghost_speed, maze=self.maze, name="Blinky")
+        blinky.color     = (255, 0, 0)
+        blinky.spawn_delay = 0
+        blinky.cage_x    = cage_home_px
+        blinky.cage_y    = cage_home_py
         self.ghosts.append(blinky)
 
-        # Pinky (Pink) - targets 4 tiles ahead of Pac-Man - spawns after 5 seconds
-        # Spawn slightly offset from Blinky
-        pinky = Pinky(cage_center_x + self.tile_size, cage_center_y, self.tile_size, speed=self.ghost_speed, maze=self.maze, name="Pinky")
-        pinky.color = (255, 184, 255)  # Pink color
-        pinky.spawn_delay = 5 * 60  # 5 seconds at 60 FPS
-        pinky.cage_x = cage_center_x + self.tile_size
-        pinky.cage_y = cage_center_y
+        # Pinky (Pink) — centre of cage interior
+        pinky = Pinky(pinky_px, interior_py, ts, speed=self.ghost_speed, maze=self.maze, name="Pinky")
+        pinky.color      = (255, 184, 255)
+        pinky.spawn_delay = 5 * 60
+        pinky.cage_x     = pinky_px
+        pinky.cage_y     = interior_py
         self.ghosts.append(pinky)
 
-        # Inky (Cyan) - targets based on vector from Blinky - spawns after 10 seconds
-        # Spawn below Blinky, pass Blinky reference for targeting
-        inky = Inky(cage_center_x, cage_center_y + self.tile_size, self.tile_size, speed=self.ghost_speed, maze=self.maze, name="Inky", blinky=blinky)
-        inky.color = (0, 255, 255)  # Cyan color
-        inky.spawn_delay = 10 * 60  # 10 seconds at 60 FPS (5 + 5)
-        inky.cage_x = cage_center_x
-        inky.cage_y = cage_center_y + self.tile_size
+        # Inky (Cyan) — left of centre
+        inky = Inky(inky_px, interior_py, ts, speed=self.ghost_speed, maze=self.maze, name="Inky", blinky=blinky)
+        inky.color       = (0, 255, 255)
+        inky.spawn_delay = 10 * 60
+        inky.cage_x      = inky_px
+        inky.cage_y      = interior_py
         self.ghosts.append(inky)
 
-        # Clyde (Orange) - chases Pac-Man but retreats when within 8 tiles - spawns after 15 seconds
-        # Spawn on the other side
-        clyde = Clyde(cage_center_x - self.tile_size, cage_center_y, self.tile_size, speed=self.ghost_speed, maze=self.maze, name="Clyde")
-        clyde.color = (255, 184, 82)  # Orange color
-        clyde.spawn_delay = 15 * 60  # 15 seconds at 60 FPS (5 + 5 + 5)
-        clyde.cage_x = cage_center_x - self.tile_size
-        clyde.cage_y = cage_center_y
+        # Clyde (Orange) — right of centre
+        clyde = Clyde(clyde_px, interior_py, ts, speed=self.ghost_speed, maze=self.maze, name="Clyde")
+        clyde.color      = (255, 184, 82)
+        clyde.spawn_delay = 15 * 60
+        clyde.cage_x     = clyde_px
+        clyde.cage_y     = interior_py
         self.ghosts.append(clyde)
 
     def _initialize_pellets(self):
         pellets = []
-        cage_center_x = self.maze.width // 2
-        cage_center_y = self.maze.height // 2
 
-        # Define ghost spawn positions in grid coordinates
-        ghost_spawn_positions = set()
+        # Exclude the entire cage box (including one tile margin around it)
+        cage_exclusion = set()
         if self.enable_ghosts:
-            # Blinky spawn
-            ghost_spawn_positions.add((cage_center_x, cage_center_y - 2))
-            # Pinky spawn (offset right)
-            ghost_spawn_positions.add((cage_center_x + 1, cage_center_y - 2))
-            # Clyde spawn (offset left)
-            ghost_spawn_positions.add((cage_center_x - 1, cage_center_y - 2))
-            # Inky spawn (offset down)
-            ghost_spawn_positions.add((cage_center_x, cage_center_y - 1))
-
-            # Also exclude adjacent tiles around each ghost spawn for safety
-            for gx, gy in list(ghost_spawn_positions):
-                for dx, dy in [(0, 1), (0, -1), (1, 0), (-1, 0)]:
-                    ghost_spawn_positions.add((gx + dx, gy + dy))
+            m = self.maze
+            for gy in range(m.cage_top - 1, m.cage_bottom + 2):
+                for gx in range(m.cage_left - 1, m.cage_right + 2):
+                    cage_exclusion.add((gx, gy))
 
         for y in range(self.maze.height):
             for x in range(self.maze.width):
-                # Skip if this is a ghost spawn position
-                if (x, y) in ghost_spawn_positions:
+                if (x, y) in cage_exclusion:
                     continue
-
                 if self.maze.maze[y][x] == 0:
                     pellets.append((x * self.tile_size + self.tile_size // 2,
-                                   y * self.tile_size + self.tile_size // 2))
+                                    y * self.tile_size + self.tile_size // 2))
 
         total_possible = len(pellets)
         print(f"[Pellets] Placing all {total_possible} pellets. "

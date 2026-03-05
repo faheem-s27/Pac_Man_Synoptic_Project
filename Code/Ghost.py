@@ -36,8 +36,8 @@ class Ghost:
         self.name = name
         self.offset = (self.tile_size - self.size) / 2
 
-        self.x = float(x + self.offset)
-        self.y = float(y + self.offset)
+        self.x = float(x)
+        self.y = float(y)
 
         self.current_dir = (0, 0)
         self.state = GhostState.SPAWNING  # Start in spawning state
@@ -53,6 +53,8 @@ class Ghost:
         self.spawn_delay = 0  # Will be set by GameEngine
         self.spawn_timer = 0
         self.is_spawned = False
+        self.idle_bob_offset = 0.0    # vertical pixel offset for idle bob
+        self.idle_bob_dir = 1         # +1 down, -1 up
 
         # Frightened mode
         self.original_color = None
@@ -146,6 +148,8 @@ class Ghost:
         self.state = GhostState.SPAWNING
         self.spawn_timer = 0
         self.is_spawned = False
+        self.idle_bob_offset = 0.0
+        self.idle_bob_dir = 1
         self.current_dir = (0, 0)
         self.path = []
         # is_scatter is intentionally NOT reset here — the GameEngine sets it
@@ -189,7 +193,7 @@ class Ghost:
         base_gy = int(self.cage_y // self.tile_size)
 
         if (0 <= base_gx < self.maze.width and 0 <= base_gy < self.maze.height and
-                self.maze.maze[base_gy][base_gx] == 0):
+                self.maze.maze[base_gy][base_gx] in (0, 2)):
             return base_gx, base_gy
 
         # Search outward in rings for the nearest walkable tile.
@@ -202,7 +206,7 @@ class Ghost:
                     gx = base_gx + dx
                     gy = base_gy + dy
                     if 0 <= gx < self.maze.width and 0 <= gy < self.maze.height:
-                        if self.maze.maze[gy][gx] == 0:
+                        if self.maze.maze[gy][gx] in (0, 2):
                             return gx, gy
 
         return None
@@ -250,9 +254,21 @@ class Ghost:
             if self.spawn_timer >= self.spawn_delay:
                 # Spawn complete, transition to the current mode
                 self.is_spawned = True
+                self.idle_bob_offset = 0.0
                 self.state = GhostState.SCATTER if self.is_scatter else GhostState.CHASE
                 self.spawn_timer = 0
-            return  # Don't update while spawning
+            else:
+                # Idle bob: move up and down 2 pixels while waiting
+                BOB_SPEED = 0.4
+                BOB_MAX   = 3.0
+                self.idle_bob_offset += BOB_SPEED * self.idle_bob_dir
+                if self.idle_bob_offset >= BOB_MAX:
+                    self.idle_bob_offset = BOB_MAX
+                    self.idle_bob_dir = -1
+                elif self.idle_bob_offset <= -BOB_MAX:
+                    self.idle_bob_offset = -BOB_MAX
+                    self.idle_bob_dir = 1
+            return  # Don't run movement logic while spawning
 
         # Handle eaten state - return to cage
         if self.state == GhostState.EATEN:
@@ -308,7 +324,7 @@ class Ghost:
         next_x = self.x + self.current_dir[0] * self.speed
         next_y = self.y + self.current_dir[1] * self.speed
 
-        if self.maze.can_move(next_x, next_y, self.size):
+        if self.maze.can_ghost_move(next_x, next_y, self.size):
             self.x, self.y = next_x, next_y
         else:
             # Hit a wall, choose a random direction
@@ -316,27 +332,26 @@ class Ghost:
             for d in [(0, -1), (0, 1), (-1, 0), (1, 0)]:
                 test_x = self.x + d[0] * self.speed
                 test_y = self.y + d[1] * self.speed
-                if self.maze.can_move(test_x, test_y, self.size):
+                if self.maze.can_ghost_move(test_x, test_y, self.size):
                     valid_dirs.append(d)
 
             if valid_dirs:
                 self.current_dir = random.choice(valid_dirs)
                 next_x = self.x + self.current_dir[0] * self.speed
                 next_y = self.y + self.current_dir[1] * self.speed
-                if self.maze.can_move(next_x, next_y, self.size):
+                if self.maze.can_ghost_move(next_x, next_y, self.size):
                     self.x, self.y = next_x, next_y
 
         # At intersections, randomly change direction (25% chance)
         if self.is_at_center() and random.random() < 0.25:
             opposite = _get_opposite_dir(self.current_dir)
             valid_dirs = []
-
             for d in [(0, -1), (0, 1), (-1, 0), (1, 0)]:
-                if d == opposite:  # No 180-degree turns
+                if d == opposite:
                     continue
                 test_x = self.x + d[0] * self.speed
                 test_y = self.y + d[1] * self.speed
-                if self.maze.can_move(test_x, test_y, self.size):
+                if self.maze.can_ghost_move(test_x, test_y, self.size):
                     valid_dirs.append(d)
 
             if valid_dirs:
@@ -390,7 +405,7 @@ class Ghost:
                 # Check if the next tile in this direction is a wall
                 next_x = self.x + d[0] * self.speed
                 next_y = self.y + d[1] * self.speed
-                if self.maze.can_move(next_x, next_y, self.size):
+                if self.maze.can_ghost_move(next_x, next_y, self.size):
                     valid_dirs.append(d)
 
             if valid_dirs:
@@ -429,7 +444,7 @@ class Ghost:
         """Unified forward momentum logic."""
         if self.current_dir == (0, 0):
             for d in [(0, -1), (0, 1), (-1, 0), (1, 0)]:
-                if self.maze.can_move(self.x + d[0], self.y + d[1], self.size):
+                if self.maze.can_ghost_move(self.x + d[0], self.y + d[1], self.size):
                     self.current_dir = d
                     break
             return
@@ -437,10 +452,9 @@ class Ghost:
         next_x = self.x + self.current_dir[0] * self.speed
         next_y = self.y + self.current_dir[1] * self.speed
 
-        if self.maze.can_move(next_x, next_y, self.size):
+        if self.maze.can_ghost_move(next_x, next_y, self.size):
             self.x, self.y = next_x, next_y
         else:
-            # Hit a wall? Force turn check by resetting counter
             self.path_update_counter = self.PATH_RECALC_FRAMES
 
     def get_target_tile(self, pacman):
@@ -488,7 +502,19 @@ class Ghost:
                 else:
                     pygame.draw.circle(surface, self.color, (int(center_x), int(center_y)), self.render_size // 3)
         elif not self.is_spawned:
-            pygame.draw.circle(surface, (50, 50, 50), (int(center_x), int(center_y)), self.render_size // 3)
+            # Draw ghost in its idle/waiting state with a bob offset
+            draw_x = self.x + self.render_offset
+            draw_y = self.y + self.render_offset + self.idle_bob_offset
+            if self.ghost_images and self.color:
+                idle_dir = "down"
+                frames = self.ghost_images.get(idle_dir) or next(iter(self.ghost_images.values()))
+                frame_index = (self.animation_counter // self.ANIMATION_FRAME_DELAY) % len(frames)
+                surface.blit(frames[frame_index], (draw_x, draw_y))
+            elif self.color:
+                pygame.draw.circle(surface, self.color,
+                                   (int(self.x + self.size // 2),
+                                    int(self.y + self.size // 2 + self.idle_bob_offset)),
+                                   self.render_size // 3)
 
 
 class Pinky(Ghost):
