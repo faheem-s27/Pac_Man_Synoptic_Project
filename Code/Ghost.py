@@ -1,8 +1,8 @@
 import pygame
 from enum import Enum
 from PIL import Image
-from Code.Pathfinding import Pathfinding
 import os
+from Code.Pathfinding import Pathfinding
 
 
 class GhostState(Enum):
@@ -20,8 +20,8 @@ def _get_opposite_dir(direction):
 
 class Ghost:
     PATH_RECALC_FRAMES = 10
-    SCATTER_DURATION = 7 * 60
-    CHASE_DURATION = 25 * 60
+    SCATTER_DURATION = 1 * 60
+    CHASE_DURATION = 3000 * 60
     ANIMATION_FRAME_DELAY = 6  # 60 FPS / 6 ~= 10 animation frames per second
     VISUAL_SCALE = 0.82
 
@@ -66,43 +66,53 @@ class Ghost:
 
         # Load ghost images if they exist
         self.ghost_images = {}
+        self.frightened_images = []
         self.animation_counter = 0
         self._load_ghost_images()
 
+    def _load_gif_frames(self, gif_path):
+        """Extract all frames from a GIF file into scaled pygame surfaces."""
+        frames = []
+        pil_image = Image.open(gif_path)
+        frame_index = 0
+
+        while True:
+            try:
+                pil_image.seek(frame_index)
+                frame = pil_image.convert("RGBA")
+                frame_data = pygame.image.fromstring(frame.tobytes(), frame.size, "RGBA")
+                frame_scaled = pygame.transform.scale(frame_data, (self.render_size, self.render_size))
+                frames.append(frame_scaled)
+                frame_index += 1
+            except EOFError:
+                break
+
+        return frames
+
     def _load_ghost_images(self):
-        """Load directional GIF images for this ghost and extract all frames."""
+        """Load directional GIFs plus frightened GIF for this ghost."""
         directions = ["up", "down", "left", "right"]
         ghost_name = self.name.lower()
+        images_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "Images"))
 
         for direction in directions:
             try:
-                gif_path = f"../Images/{ghost_name}_{direction}.gif"
-                frames = []
-
-                # Use PIL to extract frames from GIF
-                pil_image = Image.open(gif_path)
-
-                # Extract all frames from the GIF
-                frame_index = 0
-                while True:
-                    try:
-                        pil_image.seek(frame_index)
-                        # Convert PIL image to pygame surface
-                        frame = pil_image.convert("RGBA")
-                        # Convert PIL Image to pygame Surface
-                        frame_data = pygame.image.fromstring(frame.tobytes(), frame.size, "RGBA")
-                        # Scale to a slightly smaller visual size for wall gap readability
-                        frame_scaled = pygame.transform.scale(frame_data, (self.render_size, self.render_size))
-                        frames.append(frame_scaled)
-                        frame_index += 1
-                    except EOFError:
-                        break
-
+                gif_path = os.path.join(images_dir, f"{ghost_name}_{direction}.gif")
+                frames = self._load_gif_frames(gif_path)
                 if frames:
                     self.ghost_images[direction] = frames
                     print(f"Loaded {len(frames)} frames for {self.name} {direction} animation")
             except Exception as e:
                 print(f"Note: Could not load {self.name} {direction} GIF: {e}")
+
+        try:
+            frightened_path = os.path.join(images_dir, "frightened_ghost.gif")
+            frames = self._load_gif_frames(frightened_path)
+            if frames:
+                self.frightened_images = frames
+                print(f"Loaded {len(frames)} frames for frightened ghost animation")
+        except Exception:
+            print("Note: Could not load frightened ghost GIF")
 
     def _get_current_direction_name(self):
         """Determine which direction the ghost is currently facing."""
@@ -450,6 +460,14 @@ class Ghost:
             return
 
         if self.is_spawned and self.color:
+            # Frightened ghosts use the dedicated blue frightened GIF animation.
+            if self.state == GhostState.FRIGHTENED and self.frightened_images:
+                frames = self.frightened_images
+                frame_index = (self.animation_counter // self.ANIMATION_FRAME_DELAY) % len(frames)
+                image = frames[frame_index]
+                surface.blit(image, (self.x + self.render_offset, self.y + self.render_offset))
+                return
+
             if self.ghost_images:
                 direction = self._get_current_direction_name()
                 if direction in self.ghost_images and len(self.ghost_images[direction]) > 0:
