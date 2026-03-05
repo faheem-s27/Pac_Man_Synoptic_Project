@@ -26,9 +26,11 @@ class GameEngine:
                  maze_algorithm="recursive_backtracking",
                  enable_ghosts=True, tile_size=40, lives=3,
                  window_resolution="800x800",
-                 god_mode=False, max_pellets=-1,
+                 god_mode=False, max_pellets=-1, pellets_to_win=-1,
                  scatter_duration=10, chase_duration=20,
-                 always_chase=False, **kwargs):
+                 always_chase=False,
+                 level=1, ghost_speed_increment=0.1,
+                 **kwargs):
         # Parse resolution string if provided
         if isinstance(window_resolution, str):
             screen_width, screen_height = parse_resolution(window_resolution)
@@ -37,9 +39,17 @@ class GameEngine:
         self.screen_height = screen_height
         self.tile_size = tile_size
         self.enable_ghosts = enable_ghosts
-        self.ghost_speed = ghost_speed
         self.god_mode = god_mode
-        self.max_pellets = max_pellets  # -1 means unlimited
+        self.max_pellets = max_pellets  # legacy, unused — kept for **kwargs safety
+        self.pellets_to_win = pellets_to_win  # -1 = eat all pellets to win
+        self.pellets_eaten_this_level = 0
+
+        # Level system
+        self.level = level
+        self.ghost_speed_increment = ghost_speed_increment
+        self.base_ghost_speed = ghost_speed
+        # Each level beyond 1 adds ghost_speed_increment to ghost speed
+        self.ghost_speed = ghost_speed + (level - 1) * ghost_speed_increment
 
         # Global scatter/chase mode — must be set before _initialize_ghosts
         self.always_chase = always_chase
@@ -54,6 +64,8 @@ class GameEngine:
         if maze_width % 2 == 0: maze_width -= 1
         if maze_height % 2 == 0: maze_height -= 1
 
+        self.use_classic_maze = use_classic_maze
+        self.maze_algorithm = maze_algorithm
         self.maze = Maze(self.tile_size, width=maze_width, height=maze_height,
                          use_classic=use_classic_maze, algorithm=maze_algorithm)
 
@@ -134,6 +146,66 @@ class GameEngine:
 
     def unpause(self):
         self.paused = False
+
+    def next_level(self):
+        """Advance to the next level — increase ghost speed and reset the board."""
+        self.level += 1
+        self.ghost_speed = self.base_ghost_speed + (self.level - 1) * self.ghost_speed_increment
+        print(f"[Level] Advancing to level {self.level} — ghost speed: {self.ghost_speed:.2f}")
+
+        # Update speed on existing ghosts
+        for ghost in self.ghosts:
+            ghost.speed = self.ghost_speed
+            ghost.original_speed = self.ghost_speed
+            ghost.eaten_speed = self.ghost_speed * 2
+
+        # Regenerate maze and pellets
+        self.maze = Maze(self.tile_size, width=self.maze.width, height=self.maze.height,
+                         use_classic=self.use_classic_maze, algorithm=self.maze_algorithm)
+        self.pellets = self._initialize_pellets()
+        self.power_pellets = self._initialize_power_pellets()
+
+        # Reset pacman and ghost positions
+        self.won = False
+        self.game_over = False
+        self.frightened_mode = False
+        self.frightened_timer = 0
+        self.ghosts_eaten_combo = 0
+        self.scatter_chase_timer = 0
+        self.global_scatter_mode = False if self.always_chase else True
+        self.pellets_eaten_this_level = 0
+
+        pacman_x, pacman_y = self._find_safe_spawn_bottom_center()
+        self.pacman.x = pacman_x
+        self.pacman.y = pacman_y
+        self.pacman.direction = (0, 0)
+        self.pacman.next_direction = (0, 0)
+
+        if self.enable_ghosts:
+            cage_center_x = (self.maze.width // 2) * self.tile_size
+            cage_center_y = (self.maze.height // 2) * self.tile_size
+            for ghost in self.ghosts:
+                ghost.maze = self.maze
+                ghost.pathfinding = Pathfinding(self.maze)
+            if len(self.ghosts) > 0:
+                self.ghosts[0].x = cage_center_x + self.ghosts[0].offset
+                self.ghosts[0].y = cage_center_y + self.ghosts[0].offset
+                self.ghosts[0].reset_spawn()
+            if len(self.ghosts) > 1:
+                self.ghosts[1].x = cage_center_x + self.tile_size + self.ghosts[1].offset
+                self.ghosts[1].y = cage_center_y + self.ghosts[1].offset
+                self.ghosts[1].reset_spawn()
+            if len(self.ghosts) > 2:
+                self.ghosts[2].x = cage_center_x + self.ghosts[2].offset
+                self.ghosts[2].y = cage_center_y + self.tile_size + self.ghosts[2].offset
+                self.ghosts[2].reset_spawn()
+            if len(self.ghosts) > 3:
+                self.ghosts[3].x = cage_center_x - self.tile_size + self.ghosts[3].offset
+                self.ghosts[3].y = cage_center_y + self.ghosts[3].offset
+                self.ghosts[3].reset_spawn()
+            self._sync_ghost_modes()
+
+        self.pathfinding = Pathfinding(self.maze)
 
     def _reset_positions(self):
         """Reset Pac-Man and ghosts to their starting positions after a life is lost."""
@@ -260,20 +332,8 @@ class GameEngine:
                                    y * self.tile_size + self.tile_size // 2))
 
         total_possible = len(pellets)
-
-        # Apply max_pellets cap (-1 = unlimited)
-        if self.max_pellets >= 0:
-            if self.max_pellets >= total_possible:
-                print(f"[Pellets] max_pellets ({self.max_pellets}) exceeds or equals max possible "
-                      f"({total_possible}). Placing all {total_possible} pellets.")
-            else:
-                print(f"[Pellets] Capping pellets at {self.max_pellets} (max possible: {total_possible}).")
-                # Spread them evenly by taking every nth pellet
-                step = total_possible / self.max_pellets
-                pellets = [pellets[int(i * step)] for i in range(self.max_pellets)]
-        else:
-            print(f"[Pellets] Placing all {total_possible} pellets (max_pellets = unlimited).")
-
+        print(f"[Pellets] Placing all {total_possible} pellets. "
+              f"Pellets to win: {'all' if self.pellets_to_win < 0 else self.pellets_to_win}.")
         return pellets
 
     def _initialize_power_pellets(self):
@@ -439,6 +499,7 @@ class GameEngine:
             distance_sq = (pacman_x - px) ** 2 + (pacman_y - py) ** 2
             if distance_sq < collision_sq_threshold:
                 self.pacman.eat_pellet(10)
+                self.pellets_eaten_this_level += 1
                 # Play alternating pellet sounds only if channel is not busy
                 if self.pellet_sounds and self.pellet_channel and not self.pellet_channel.get_busy():
                     sound = self.pellet_sounds[self.pellet_sound_index % len(self.pellet_sounds)]
@@ -505,8 +566,19 @@ class GameEngine:
                         # Restore global scatter/chase mode
                         ghost.set_mode(self.global_scatter_mode)
 
-        if not self.pellets and not self.power_pellets:
-            self.won = True
+        # Win condition — eat pellets_to_win pellets, or all pellets if -1
+        total_spawned = len(self.pellets) + len(self.power_pellets) + self.pellets_eaten_this_level
+        if self.pellets_to_win < 0:
+            # Classic: eat every pellet
+            if not self.pellets and not self.power_pellets:
+                self.won = True
+        else:
+            target = min(self.pellets_to_win, total_spawned)
+            if self.pellets_to_win > total_spawned:
+                print(f"[Pellets] pellets_to_win ({self.pellets_to_win}) exceeds total spawned "
+                      f"({total_spawned}). Winning when all {total_spawned} are eaten.")
+            if self.pellets_eaten_this_level >= target:
+                self.won = True
 
         # Check ghost collision
         for ghost in self.ghosts:
@@ -587,8 +659,15 @@ class GameEngine:
 
         font = pygame.font.Font(None, 32)
         surface.blit(font.render(f"Score: {self.pacman.score}", True, (255, 255, 255)), (10, 10))
-        surface.blit(font.render(f"Pellets: {len(self.pellets) + len(self.power_pellets)}", True, (255, 255, 255)), (self.screen_width - 250, 10))
+        surface.blit(font.render(f"Level: {self.level}", True, (255, 255, 0)), (10, 40))
         surface.blit(font.render(f"Lives: {self.lives}", True, (255, 255, 255)), (self.screen_width - 250, 50))
+
+        if self.pellets_to_win >= 0:
+            total_spawned = len(self.pellets) + len(self.power_pellets) + self.pellets_eaten_this_level
+            target = min(self.pellets_to_win, total_spawned)
+            surface.blit(font.render(f"Pellets: {self.pellets_eaten_this_level}/{target}", True, (255, 255, 255)), (self.screen_width - 250, 10))
+        else:
+            surface.blit(font.render(f"Pellets: {len(self.pellets) + len(self.power_pellets)}", True, (255, 255, 255)), (self.screen_width - 250, 10))
 
         # Display frightened mode timer
         if self.frightened_mode:

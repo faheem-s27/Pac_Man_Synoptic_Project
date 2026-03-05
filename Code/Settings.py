@@ -18,9 +18,12 @@ class Settings:
         "god_mode": False,
         "window_resolution": "800x800",
         "max_pellets": -1,
+        "pellets_to_win": -1,
         "scatter_duration": 10,
         "chase_duration": 20,
-        "always_chase": False
+        "always_chase": False,
+        "level": 1,
+        "ghost_speed_increment": 0.1
     }
 
     def __init__(self, settings_file="game_settings.json"):

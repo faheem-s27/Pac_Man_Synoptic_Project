@@ -1,6 +1,6 @@
 {
   "window_resolution": "1000x800",
-  "tile_size": 20,
+  "tile_size": 30,
   "pacman_speed": 2,
   "ghost_speed": 1.9,
   "use_classic_maze": false,
@@ -8,8 +8,10 @@
   "enable_ghosts": true,
   "lives": 3,
   "god_mode": true,
-  "max_pellets": -1,
+  "pellets_to_win": -1,
   "scatter_duration": 5,
   "chase_duration": 30,
-  "always_chase": false
+  "always_chase": false,
+  "level": 1,
+  "ghost_speed_increment": 0.1
 }

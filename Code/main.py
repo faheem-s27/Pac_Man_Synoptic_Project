@@ -151,7 +151,19 @@ def main():
                 game_engine.update()
                 if game_engine.game_state == GameState.AUDIO_PLAYING:
                     current_state = GameState.AUDIO_PLAYING
-                elif game_engine.game_over or game_engine.won:
+                elif game_engine.won:
+                    # Level complete — advance to next level with intro audio
+                    game_engine.next_level()
+                    game_engine.paused = True
+                    try:
+                        pygame.mixer.music.load("../Audio/pacman_beginning.wav")
+                        pygame.mixer.music.play()
+                        current_state = GameState.AUDIO_PLAYING
+                    except Exception as e:
+                        print(f"Audio Warning: {e}. Skipping level intro.")
+                        game_engine.paused = False
+                        current_state = GameState.GAME
+                elif game_engine.game_over:
                     current_state = GameState.GAME_OVER
                     pygame.mouse.set_visible(True)
 
@@ -168,13 +180,16 @@ def main():
         if current_state == GameState.GAME_OVER:
             font_go   = pygame.font.Font(None, 64)
             font_inst = pygame.font.Font(None, 32)
-            if game_engine and game_engine.won:
-                go_text = font_go.render("YOU WIN!", True, (255, 255, 0))
-            else:
-                go_text = font_go.render("GAME OVER", True, (255, 100, 100))
-            screen.blit(go_text, go_text.get_rect(center=(window_width // 2, window_height // 2 - 50)))
+            font_lvl  = pygame.font.Font(None, 36)
+            go_text = font_go.render("GAME OVER", True, (255, 100, 100))
+            screen.blit(go_text, go_text.get_rect(center=(window_width // 2, window_height // 2 - 70)))
+            if game_engine:
+                lvl_text = font_lvl.render(f"Reached Level {game_engine.level}", True, (255, 255, 0))
+                score_text = font_lvl.render(f"Score: {game_engine.pacman.score}", True, (255, 255, 255))
+                screen.blit(lvl_text,  lvl_text.get_rect(center=(window_width // 2, window_height // 2)))
+                screen.blit(score_text, score_text.get_rect(center=(window_width // 2, window_height // 2 + 40)))
             inst = font_inst.render("Click to return to menu", True, (100, 200, 255))
-            screen.blit(inst, inst.get_rect(center=(window_width // 2, window_height // 2 + 50)))
+            screen.blit(inst, inst.get_rect(center=(window_width // 2, window_height // 2 + 90)))
 
         pygame.display.flip()
         clock.tick(FPS)
