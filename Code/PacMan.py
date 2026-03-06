@@ -25,7 +25,7 @@ class PacMan:
         self.pacman_images = {}
         self.animation_counter = 0
         self.last_facing_direction = "right"
-        self._load_pacman_images()
+        self._images_loaded = False  # Images are loaded lazily on first draw()
 
     def _load_pacman_images(self):
         """Load directional GIF images for Pac-Man and extract all frames."""
@@ -55,6 +55,8 @@ class PacMan:
                     print(f"Loaded {len(frames)} frames for Pac-Man {direction} animation")
             except Exception as e:
                 print(f"Note: Could not load Pac-Man {direction} GIF: {e}")
+
+        self._images_loaded = True  # Mark attempted regardless of success
 
     def _get_current_direction_name(self):
         dx, dy = self.direction
@@ -178,6 +180,9 @@ class PacMan:
         self.x, self.y = maze.handle_teleportation(self.x, self.y)
 
     def draw(self, surface):
+        if not self._images_loaded:
+            self._load_pacman_images()
+
         center_x = self.x + self.size // 2
         center_y = self.y + self.size // 2
 

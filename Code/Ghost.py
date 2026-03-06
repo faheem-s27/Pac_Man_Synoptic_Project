@@ -67,10 +67,10 @@ class Ghost:
         self.eaten_speed = speed * 2  # Move faster when returning to cage
 
         # Load ghost images if they exist
-        self.ghost_images = {}
-        self.frightened_images = []
+        self.ghost_images = None
+        self.frightened_images = None
         self.animation_counter = 0
-        self._load_ghost_images()
+        self._images_loaded = False  # Guard so we only attempt loading once
 
     def _load_gif_frames(self, gif_path):
         """Extract all frames from a GIF file into scaled pygame surfaces."""
@@ -97,6 +97,10 @@ class Ghost:
         ghost_name = self.name.lower()
         images_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "Images"))
 
+        # Always initialise the dict before populating it
+        if self.ghost_images is None:
+            self.ghost_images = {}
+
         for direction in directions:
             try:
                 gif_path = os.path.join(images_dir, f"{ghost_name}_{direction}.gif")
@@ -115,6 +119,8 @@ class Ghost:
                 print(f"Loaded {len(frames)} frames for frightened ghost animation")
         except Exception:
             print("Note: Could not load frightened ghost GIF")
+
+        self._images_loaded = True  # Mark as attempted regardless of success
 
     def _get_current_direction_name(self):
         """Determine which direction the ghost is currently facing."""
@@ -466,6 +472,9 @@ class Ghost:
         return self.maze.width - 2, 1  # Blinky top-right corner inside walls
 
     def draw(self, surface):
+        if not self._images_loaded:
+            self._load_ghost_images()
+
         center_x = self.x + self.size // 2
         center_y = self.y + self.size // 2
 

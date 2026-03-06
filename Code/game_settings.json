@@ -1,17 +1,17 @@
 {
-  "window_resolution": "1000x1000",
+  "window_resolution": "800x800",
   "tile_size": 40,
   "pacman_speed": 3,
-  "ghost_speed": -1,
+  "ghost_speed": 2.2,
   "use_classic_maze": false,
   "maze_algorithm": "recursive_backtracking",
   "enable_ghosts": true,
   "lives": 3,
-  "god_mode": true,
+  "god_mode": false,
   "pellets_to_win": 5,
-  "scatter_duration": 5,
-  "chase_duration": 30,
+  "scatter_duration": 10,
+  "chase_duration": 20,
   "always_chase": false,
   "level": 1,
-  "ghost_speed_increment": 0.1
+  "ghost_speed_increment": 0.2
 }

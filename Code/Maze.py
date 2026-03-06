@@ -5,12 +5,12 @@ import Code.MazeGenerator as MazeGenerator
 class Maze:
     DOOR_TILE = 2  # Ghost door — passable by ghosts, wall for Pac-Man
 
-    def __init__(self, tile_size=40, width=20, height=21, use_classic=True, algorithm="recursive_backtracking"):
+    def __init__(self, tile_size=40, width=20, height=21, use_classic=True, algorithm="recursive_backtracking", seed=None):
         self.tile_size = tile_size
         self.wall_color = (33, 33, 222)
         self.door_color = (255, 182, 255)
         self.path_color = (0, 0, 0)
-        self.maze = MazeGenerator.generate_maze(use_classic, width, height, algorithm)
+        self.maze = MazeGenerator.generate_maze(use_classic, width, height, algorithm, seed=seed)
         self.width = len(self.maze[0])
         self.height = len(self.maze)
 

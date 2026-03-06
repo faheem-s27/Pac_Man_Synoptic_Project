@@ -30,6 +30,7 @@ class GameEngine:
                  scatter_duration=10, chase_duration=20,
                  always_chase=False,
                  level=1, ghost_speed_increment=0.1,
+                 maze_seed=None,
                  **kwargs):
         # Parse resolution string if provided
         if isinstance(window_resolution, str):
@@ -71,8 +72,9 @@ class GameEngine:
 
         self.use_classic_maze = use_classic_maze
         self.maze_algorithm = maze_algorithm
+        self.maze_seed = maze_seed
         self.maze = Maze(self.tile_size, width=maze_width, height=maze_height,
-                         use_classic=use_classic_maze, algorithm=maze_algorithm)
+                         use_classic=use_classic_maze, algorithm=maze_algorithm, seed=maze_seed)
 
         pacman_x, pacman_y = self._find_safe_spawn_bottom_center()
         self.pacman = PacMan(pacman_x, pacman_y, self.tile_size, speed=pacman_speed)
@@ -164,9 +166,9 @@ class GameEngine:
             ghost.original_speed = self.ghost_speed
             ghost.eaten_speed = self.ghost_speed * 2
 
-        # Regenerate maze and pellets
+        # Regenerate maze — always random on level advance (seed only pins the first maze)
         self.maze = Maze(self.tile_size, width=self.maze.width, height=self.maze.height,
-                         use_classic=self.use_classic_maze, algorithm=self.maze_algorithm)
+                         use_classic=self.use_classic_maze, algorithm=self.maze_algorithm, seed=None)
         self.pellets = self._initialize_pellets()
         self.power_pellets = self._initialize_power_pellets()
 
@@ -653,6 +655,9 @@ class GameEngine:
                     break  # Only process one collision per frame
 
     def draw(self, surface):
+        if surface is None:
+            return  # Headless — skip all rendering and image loading
+
         self.maze.draw(surface)
 
         # Draw regular pellets

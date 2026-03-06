@@ -26,9 +26,12 @@ CLASSIC_MAZE = [
 ]
 
 
-def generate_maze(use_classic=True, width=20, height=21, algorithm="recursive_backtracking"):
+def generate_maze(use_classic=True, width=20, height=21, algorithm="recursive_backtracking", seed=None):
     if use_classic:
         return [row[:] for row in CLASSIC_MAZE]
+
+    if seed is not None:
+        random.seed(seed)
 
     if width % 2 == 0:
         width += 1
