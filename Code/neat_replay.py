@@ -1,0 +1,115 @@
+"""
+neat_replay.py
+==============
+Load a saved NEAT genome and watch it play Pac-Man in a visible window.
+
+Usage
+-----
+    # Watch the best genome found so far
+    python -m Code.neat_replay
+
+    # Watch a specific genome file
+    python -m Code.neat_replay --genome checkpoints/winner_genome.pkl
+"""
+
+import os
+import sys
+import pickle
+import argparse
+import time
+
+import neat
+
+_HERE = os.path.dirname(os.path.abspath(__file__))
+_ROOT = os.path.dirname(_HERE)
+if _ROOT not in sys.path:
+    sys.path.insert(0, _ROOT)
+
+from Code.PacManEnv import PacManEnv
+from Code.Settings  import Settings
+
+# ── Config ───────────────────────────────────────────────────────────────────
+_SETTINGS      = Settings(os.path.join(_HERE, "game_settings.json")).get_all()
+MAZE_SEED      = _SETTINGS.get("maze_seed", None)
+MAZE_ALGORITHM = "recursive_backtracking"
+CONFIG_PATH    = os.path.join(_HERE, "neat_config.ini")
+ACTION_NAMES   = {0: "NOOP", 1: "UP", 2: "DOWN", 3: "LEFT", 4: "RIGHT"}
+
+
+def replay(genome_path: str):
+    if not os.path.exists(genome_path):
+        print(f"[ERROR] Genome file not found: {genome_path}")
+        sys.exit(1)
+
+    # Load genome
+    with open(genome_path, "rb") as f:
+        genome = pickle.load(f)
+
+    print(f"Loaded genome from: {genome_path}")
+    print(f"  Genome fitness : {getattr(genome, 'fitness', 'unknown')}")
+    print(f"  Nodes          : {len(genome.nodes)}")
+    print(f"  Connections    : {len(genome.connections)}")
+
+    # Build network
+    config = neat.Config(
+        neat.DefaultGenome,
+        neat.DefaultReproduction,
+        neat.DefaultSpeciesSet,
+        neat.DefaultStagnation,
+        CONFIG_PATH,
+    )
+    net = neat.nn.FeedForwardNetwork.create(genome, config)
+
+    # Run with rendering
+    env = PacManEnv(
+        render_mode="human",
+        obs_type="vector",
+        maze_seed=MAZE_SEED,
+        maze_algorithm=MAZE_ALGORITHM,
+    )
+
+    obs, info = env.reset()
+    total_reward = 0.0
+    step = 0
+
+    print("\nWatching NEAT genome play — close the window to stop.\n")
+
+    try:
+        while True:
+            outputs = net.activate(obs.tolist())
+            action  = outputs.index(max(outputs))
+
+            obs, reward, terminated, truncated, info = env.step(action)
+            total_reward += reward
+            step += 1
+
+            if reward > 0.1 or reward < -0.5:
+                print(f"  [step {step:>5}] {ACTION_NAMES[action]:<5}  "
+                      f"reward={reward:+.1f}  cumulative={total_reward:+.1f}  "
+                      f"score={info['score']}  lives={info['lives']}")
+
+            if terminated or truncated:
+                status = "GAME OVER" if info.get("game_over") else "TRUNCATED"
+                print(f"\nEpisode ended ({status}) after {step} steps")
+                print(f"  Final score    : {info['score']}")
+                print(f"  Levels cleared : {info['levels_completed']}")
+                print(f"  Total reward   : {total_reward:+.1f}")
+                break
+
+            time.sleep(0.016)   # ~60 fps
+
+    finally:
+        env.close()
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Replay a saved NEAT genome")
+    parser.add_argument(
+        "--genome",
+        type=str,
+        default=os.path.join(_HERE, "checkpoints", "best_genome.pkl"),
+        help="Path to the pickled genome file",
+    )
+    args = parser.parse_args()
+    replay(args.genome)
+

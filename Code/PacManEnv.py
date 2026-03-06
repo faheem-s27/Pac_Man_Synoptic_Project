@@ -5,23 +5,22 @@ A Gymnasium-compatible environment that wraps the existing Pac-Man GameEngine.
 
 Observation Space
 -----------------
-A flat numpy array containing:
-  [0]       pacman_tile_x   (int, normalised 0-1)
-  [1]       pacman_tile_y   (int, normalised 0-1)
-  [2]       pacman_dir_x    (-1, 0, 1)
-  [3]       pacman_dir_y    (-1, 0, 1)
-  [4..7]    ghost_0 tile_x, tile_y, state, is_frightened  (normalised)
-  [8..11]   ghost_1 ...
-  [12..15]  ghost_2 ...
-  [16..19]  ghost_3 ...
-  [20]      lives (normalised 0-1 over max_lives=3)
-  [21]      pellets_eaten_ratio  (0-1)
-  [22]      frightened_mode_active (0 or 1)
-  [23]      frightened_timer_ratio (0-1)
-  [24]      global_scatter_mode (0 or 1)
-
-Additionally the environment can optionally provide a pixel render of the game
-as the observation by setting `obs_type="pixels"` in the constructor.
+A flat numpy array of 34 floats:
+  [0-1]     pacman pos x, y           (normalised 0-1)
+  [2-3]     pacman dir dx, dy         (-1, 0, 1)
+  [4-7]     ghost_0  rel_x, rel_y, dist, threat
+  [8-11]    ghost_1  rel_x, rel_y, dist, threat
+  [12-15]   ghost_2  rel_x, rel_y, dist, threat
+  [16-19]   ghost_3  rel_x, rel_y, dist, threat
+  [20-21]   nearest pellet  rel_x, rel_y
+  [22-25]   wall sensors    up, down, left, right  (1=wall)
+  [26]      pellet_ratio eaten  (0-1)
+  [27]      frightened_mode active  (0 or 1)
+  [28]      frightened_timer_ratio  (0-1)
+  [29]      lives / 3
+  [30]      global_scatter_mode  (0 or 1)
+  [31-32]   nearest power pellet rel_x, rel_y  (0,0 if none left)
+  [33]      power pellets remaining (normalised 0-1)
 
 Action Space
 ------------
@@ -178,10 +177,20 @@ class PacManEnv(gym.Env):
                 low=0, high=255, shape=(h, w, 3), dtype=np.uint8
             )
         else:
-            # Vector obs: 35 floats in [0, 1] (or small integers)
-            # See module docstring for layout
+            # Vector obs: 34 floats
+            # [0-3]   pacman pos + dir
+            # [4-19]  4 ghosts x (rel_x, rel_y, dist, threat)
+            # [20-21] nearest pellet rel_x, rel_y
+            # [22-25] wall sensors (up, down, left, right)
+            # [26]    pellet_ratio
+            # [27]    frit_active
+            # [28]    frit_timer
+            # [29]    lives/3
+            # [30]    scatter_mode
+            # [31-32] nearest power pellet rel_x, rel_y
+            # [33]    power pellets remaining (normalised 0-1)
             self.observation_space = spaces.Box(
-                low=-1.0, high=1.0, shape=(31,), dtype=np.float32
+                low=-1.0, high=1.0, shape=(34,), dtype=np.float32
             )
 
         # Reward tracking (to compute step reward)
@@ -433,6 +442,21 @@ class PacManEnv(gym.Env):
         obs.extend(wall_sensors)
 
         obs.extend([pellet_ratio, frit_active, frit_time, float(eng.lives / 3), float(eng.global_scatter_mode)])
+
+        # 6. Power pellet radar (2 values) + count (1 value)
+        max_pp = max(len(eng.power_pellets), 1)   # avoid div-by-zero on first step
+        if eng.power_pellets:
+            pp_dists = [(p[0] - eng.pacman.x) ** 2 + (p[1] - eng.pacman.y) ** 2
+                        for p in eng.power_pellets]
+            cp = eng.power_pellets[int(np.argmin(pp_dists))]
+            pp_rel_x = (cp[0] - eng.pacman.x) / mw_px
+            pp_rel_y = (cp[1] - eng.pacman.y) / mh_px
+            pp_count_norm = len(eng.power_pellets) / max_pp
+        else:
+            pp_rel_x = 0.0
+            pp_rel_y = 0.0
+            pp_count_norm = 0.0
+        obs.extend([pp_rel_x, pp_rel_y, pp_count_norm])
 
         return np.array(obs, dtype=np.float32)
 

@@ -69,11 +69,14 @@ def main():
     print("Pac-Man Environment - Initialization")
 
     pygame.init()
-    pygame.mixer.init()
 
-    # Load settings from JSON — this is the only source of truth
+    # Load settings first — everything else depends on it
     settings = Settings("game_settings.json")
     game_config = settings.get_all()
+
+    enable_sound = game_config.get("enable_sound", True)
+    if enable_sound:
+        pygame.mixer.init()
 
     resolution = parse_resolution(settings.get("window_resolution", "800x800"))
     window_width, window_height = resolution
@@ -88,11 +91,12 @@ def main():
     game_engine = None
 
     menu_music_loaded = False
-    try:
-        pygame.mixer.music.load("../Audio/pacman_intermission.wav")
-        menu_music_loaded = True
-    except Exception as e:
-        print(f"Audio Warning (Menu): {e}")
+    if enable_sound:
+        try:
+            pygame.mixer.music.load("../Audio/pacman_intermission.wav")
+            menu_music_loaded = True
+        except Exception as e:
+            print(f"Audio Warning (Menu): {e}")
 
     run = True
     while run:
@@ -107,17 +111,24 @@ def main():
             if current_state == GameState.MENU:
                 menu_action = menu.update(mouse_pos, events)
                 if menu_action == "start_game":
-                    pygame.mixer.music.stop()
+                    if enable_sound:
+                        pygame.mixer.music.stop()
                     # Re-read JSON fresh every time the game starts
                     settings = Settings("game_settings.json")
                     game_config = settings.get_all()
-                    try:
-                        pygame.mixer.music.load("../Audio/pacman_beginning.wav")
-                        pygame.mixer.music.play()
+                    enable_sound = game_config.get("enable_sound", True)
+                    intro_played = False
+                    if enable_sound:
+                        try:
+                            pygame.mixer.music.load("../Audio/pacman_beginning.wav")
+                            pygame.mixer.music.play()
+                            intro_played = True
+                        except Exception as e:
+                            print(f"Audio Warning: {e}. Skipping intro.")
+                    if intro_played:
                         current_state = GameState.AUDIO_PLAYING
                         game_engine = GameEngine(**game_config, paused=True)
-                    except Exception as e:
-                        print(f"Audio Warning: {e}. Skipping intro.")
+                    else:
                         current_state = GameState.GAME
                         game_engine = GameEngine(**game_config, paused=False)
                         pygame.mouse.set_visible(False)
@@ -136,11 +147,11 @@ def main():
 
         # --- State updates ---
         if current_state == GameState.MENU:
-            if menu_music_loaded and not pygame.mixer.music.get_busy():
+            if enable_sound and menu_music_loaded and not pygame.mixer.music.get_busy():
                 pygame.mixer.music.play(loops=-1)
 
         elif current_state == GameState.AUDIO_PLAYING:
-            if not pygame.mixer.music.get_busy():
+            if not enable_sound or not pygame.mixer.music.get_busy():
                 current_state = GameState.GAME
                 if game_engine:
                     game_engine.unpause()
@@ -155,12 +166,17 @@ def main():
                     # Level complete — advance to next level with intro audio
                     game_engine.next_level()
                     game_engine.paused = True
-                    try:
-                        pygame.mixer.music.load("../Audio/pacman_beginning.wav")
-                        pygame.mixer.music.play()
+                    level_intro_played = False
+                    if enable_sound:
+                        try:
+                            pygame.mixer.music.load("../Audio/pacman_beginning.wav")
+                            pygame.mixer.music.play()
+                            level_intro_played = True
+                        except Exception as e:
+                            print(f"Audio Warning: {e}. Skipping level intro.")
+                    if level_intro_played:
                         current_state = GameState.AUDIO_PLAYING
-                    except Exception as e:
-                        print(f"Audio Warning: {e}. Skipping level intro.")
+                    else:
                         game_engine.paused = False
                         current_state = GameState.GAME
                 elif game_engine.game_over:

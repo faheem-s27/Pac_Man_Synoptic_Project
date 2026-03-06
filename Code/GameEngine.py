@@ -31,6 +31,7 @@ class GameEngine:
                  always_chase=False,
                  level=1, ghost_speed_increment=0.1,
                  maze_seed=None,
+                 enable_sound=True,
                  **kwargs):
         # Parse resolution string if provided
         if isinstance(window_resolution, str):
@@ -109,47 +110,49 @@ class GameEngine:
 
         self.pellet_sounds = []
         self.pellet_sound_index = 0
-        self.pellet_channel = None  # Dedicated channel for pellet sounds
+        self.pellet_channel = None
         self.death_sound = None
-        self.death_channel = None  # Dedicated channel for death sound
+        self.death_channel = None
         self.ghost_turn_blue_sound = None
-        self.ghost_turn_blue_channel = None  # Dedicated channel for frightened entry sound
+        self.ghost_turn_blue_channel = None
         self.ghost_return_to_cage_sound = None
-        self.ghost_return_to_cage_channel = None  # Dedicated channel for ghost returning to cage
+        self.ghost_return_to_cage_channel = None
         self.eat_ghost_sound = None
-        self.eat_ghost_channel = None  # Dedicated channel for eating a ghost
-        try:
-            self.pellet_sounds = [
-                pygame.mixer.Sound("../Audio/eat_dot_0.wav"),
-                pygame.mixer.Sound("../Audio/eat_dot_1.wav"),
-            ]
-            self.pellet_channel = pygame.mixer.Channel(0)  # Use channel 0 for pellets
-        except Exception as e:
-            print(f"Audio Warning (pellet): {e}")
+        self.eat_ghost_channel = None
 
-        try:
-            self.death_sound = pygame.mixer.Sound("../Audio/pacman_death.mp3")
-            self.death_channel = pygame.mixer.Channel(1)  # Use channel 1 for death
-        except Exception as e:
-            print(f"Audio Warning (death): {e}")
+        if enable_sound:
+            try:
+                self.pellet_sounds = [
+                    pygame.mixer.Sound("../Audio/eat_dot_0.wav"),
+                    pygame.mixer.Sound("../Audio/eat_dot_1.wav"),
+                ]
+                self.pellet_channel = pygame.mixer.Channel(0)
+            except Exception as e:
+                print(f"Audio Warning (pellet): {e}")
 
-        try:
-            self.ghost_turn_blue_sound = pygame.mixer.Sound("../Audio/ghost_turn_blue.mp3")
-            self.ghost_turn_blue_channel = pygame.mixer.Channel(2)
-        except Exception as e:
-            print(f"Audio Warning (ghost turn blue): {e}")
+            try:
+                self.death_sound = pygame.mixer.Sound("../Audio/pacman_death.mp3")
+                self.death_channel = pygame.mixer.Channel(1)
+            except Exception as e:
+                print(f"Audio Warning (death): {e}")
 
-        try:
-            self.ghost_return_to_cage_sound = pygame.mixer.Sound("../Audio/ghost_return_to_cage.mp3")
-            self.ghost_return_to_cage_channel = pygame.mixer.Channel(3)
-        except Exception as e:
-            print(f"Audio Warning (ghost return to cage): {e}")
+            try:
+                self.ghost_turn_blue_sound = pygame.mixer.Sound("../Audio/ghost_turn_blue.mp3")
+                self.ghost_turn_blue_channel = pygame.mixer.Channel(2)
+            except Exception as e:
+                print(f"Audio Warning (ghost turn blue): {e}")
 
-        try:
-            self.eat_ghost_sound = pygame.mixer.Sound("../Audio/pacman_eatghost.wav")
-            self.eat_ghost_channel = pygame.mixer.Channel(4)
-        except Exception as e:
-            print(f"Audio Warning (eat ghost): {e}")
+            try:
+                self.ghost_return_to_cage_sound = pygame.mixer.Sound("../Audio/ghost_return_to_cage.mp3")
+                self.ghost_return_to_cage_channel = pygame.mixer.Channel(3)
+            except Exception as e:
+                print(f"Audio Warning (ghost return to cage): {e}")
+
+            try:
+                self.eat_ghost_sound = pygame.mixer.Sound("../Audio/pacman_eatghost.wav")
+                self.eat_ghost_channel = pygame.mixer.Channel(4)
+            except Exception as e:
+                print(f"Audio Warning (eat ghost): {e}")
 
     def unpause(self):
         self.paused = False
@@ -166,9 +169,9 @@ class GameEngine:
             ghost.original_speed = self.ghost_speed
             ghost.eaten_speed = self.ghost_speed * 2
 
-        # Regenerate maze — always random on level advance (seed only pins the first maze)
+        # Regenerate maze — use the stored seed so the layout stays constant across levels
         self.maze = Maze(self.tile_size, width=self.maze.width, height=self.maze.height,
-                         use_classic=self.use_classic_maze, algorithm=self.maze_algorithm, seed=None)
+                         use_classic=self.use_classic_maze, algorithm=self.maze_algorithm, seed=self.maze_seed)
         self.pellets = self._initialize_pellets()
         self.power_pellets = self._initialize_power_pellets()
 
