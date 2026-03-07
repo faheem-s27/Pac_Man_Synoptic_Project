@@ -23,7 +23,8 @@ class Settings:
         "chase_duration": 20,
         "always_chase": False,
         "level": 1,
-        "ghost_speed_increment": 0.1
+        "ghost_speed_increment": 0.1,
+        "enable_power_pellets": True
     }
 
     def __init__(self, settings_file="game_settings.json"):

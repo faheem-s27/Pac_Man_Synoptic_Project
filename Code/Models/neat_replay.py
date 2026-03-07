@@ -32,7 +32,7 @@ from Code.Settings  import Settings
 _SETTINGS      = Settings(os.path.join(_HERE, "game_settings.json")).get_all()
 MAZE_SEED      = _SETTINGS.get("maze_seed", None)
 MAZE_ALGORITHM = "recursive_backtracking"
-CONFIG_PATH    = os.path.join(_HERE, "neat_config.ini")
+CONFIG_PATH    = os.path.join(_HERE, "neat_config.cfg")
 ACTION_NAMES   = {0: "NOOP", 1: "UP", 2: "DOWN", 3: "LEFT", 4: "RIGHT"}
 
 
@@ -107,7 +107,8 @@ if __name__ == "__main__":
     parser.add_argument(
         "--genome",
         type=str,
-        default=os.path.join(_HERE, "checkpoints", "best_genome.pkl"),
+        default=os.path.join(_HERE, "checkpoints", "winner_genome.pkl"),
+        # default=os.path.join(_HERE, "checkpoints", "best_genome.pkl"),
         help="Path to the pickled genome file",
     )
     args = parser.parse_args()

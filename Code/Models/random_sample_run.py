@@ -4,7 +4,8 @@ from Code.PacManEnv import PacManEnv
 from Code.Settings  import Settings
 
 _HERE     = os.path.dirname(os.path.abspath(__file__))
-_settings = Settings(os.path.join(_HERE, "game_settings.json")).get_all()
+_CODE_DIR = os.path.join(_HERE, "..")   # Models/ is inside Code/
+_settings = Settings(os.path.join(_CODE_DIR, "game_settings.json")).get_all()
 MAZE_SEED = _settings.get("maze_seed", None)
 
 ACTION_NAMES = {0: "NOOP", 1: "UP", 2: "DOWN", 3: "LEFT", 4: "RIGHT"}
@@ -22,33 +23,31 @@ print("=" * 60)
 def print_obs(obs):
     """Pretty-print the observation vector.
 
-    Layout (34 values):
-      [0-1]   PacMan pos (norm)
-      [2-3]   PacMan direction
-      [4-19]  Ghosts × 4  (rel_x, rel_y, dist, threat)
-      [20-21] Nearest pellet rel_x, rel_y
-      [22-25] Wall sensors  (up, down, left, right)
-      [26]    Pellet ratio eaten
-      [27]    Frightened active
-      [28]    Frightened timer ratio
-      [29]    Lives ratio
-      [30]    Scatter mode
-      [31-32] Nearest power pellet rel_x, rel_y
-      [33]    Power pellets remaining (normalised)
+    Layout (40 values):
+      [0-3]   PacMan pos (norm) + direction
+      [4-27]  Ghosts × 4  (rel_x, rel_y, dist, dir_x, dir_y, threat)
+      [28-29] Nearest pellet rel_x, rel_y
+      [30-33] Wall sensors  (up, down, left, right)
+      [34]    Pellet ratio eaten
+      [35]    Frightened active
+      [36]    Frightened timer ratio
+      [37]    Lives ratio
+      [38]    Scatter mode
+      [39]    Nearest power pellet distance (normalised)
     """
     print("\n── Observation ──────────────────────────────────────────")
     print(f"  PacMan pos   : ({obs[0]:.3f}, {obs[1]:.3f})  dir=({obs[2]:.0f}, {obs[3]:.0f})")
     ghost_names = ["Blinky", "Pinky", "Inky", "Clyde"]
     for i, name in enumerate(ghost_names):
-        base = 4 + i * 4
+        base = 4 + i * 6
         print(f"  {name:<7} rel=({obs[base]:.3f}, {obs[base+1]:.3f})  "
-              f"dist={obs[base+2]:.3f}  threat={obs[base+3]:.0f}")
-    print(f"  Nearest pellet       rel=({obs[20]:.3f}, {obs[21]:.3f})")
-    print(f"  Nearest power pellet rel=({obs[31]:.3f}, {obs[32]:.3f})  "
-          f"remaining={obs[33]:.3f}")
-    print(f"  Walls        : up={obs[22]:.0f}  down={obs[23]:.0f}  left={obs[24]:.0f}  right={obs[25]:.0f}")
-    print(f"  Pellet ratio : {obs[26]:.3f}  Frightened={obs[27]:.0f}  frit_timer={obs[28]:.3f}")
-    print(f"  Lives ratio  : {obs[29]:.3f}  Scatter={obs[30]:.0f}")
+              f"dist={obs[base+2]:.3f}  "
+              f"dir=({obs[base+3]:.0f}, {obs[base+4]:.0f})  "
+              f"threat={obs[base+5]:.0f}")
+    print(f"  Nearest pellet       rel=({obs[28]:.3f}, {obs[29]:.3f})")
+    print(f"  Walls        : up={obs[30]:.0f}  down={obs[31]:.0f}  left={obs[32]:.0f}  right={obs[33]:.0f}")
+    print(f"  Pellet ratio : {obs[34]:.3f}  Frightened={obs[35]:.0f}  frit_timer={obs[36]:.3f}")
+    print(f"  Lives ratio  : {obs[37]:.3f}  Scatter={obs[38]:.0f}  pp_dist={obs[39]:.3f}")
     print("─────────────────────────────────────────────────────────")
 
 step = 0

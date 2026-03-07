@@ -15,5 +15,6 @@
   "chase_duration": 30,
   "always_chase": false,
   "level": 1,
-  "ghost_speed_increment": 0.2
+  "ghost_speed_increment": 0.2,
+  "enable_power_pellets": true
 }

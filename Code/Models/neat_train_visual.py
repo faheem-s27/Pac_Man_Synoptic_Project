@@ -40,20 +40,43 @@ from Code.Settings   import Settings
 
 # ─── Tunables ────────────────────────────────────────────────────────────────
 MAZE_ALGORITHM  = "recursive_backtracking"
-CONFIG_PATH     = os.path.join(_HERE, "neat_config.ini")
+CONFIG_PATH     = os.path.join(_HERE, "neat_config.cfg")
 CHECKPOINT_DIR  = os.path.join(_HERE, "checkpoints")
 NUM_GENERATIONS = 200
 MAX_STEPS       = 3_000
 
-GRID_COLS       = 5          # columns of games
-CELL_W          = 160        # pixel width  of each cell in the window
-CELL_H          = 160        # pixel height of each cell in the window
-INFO_BAR_H      = 44
-TARGET_FPS      = 60
+MAX_WINDOW_W = 1400
+MAX_WINDOW_H = 900
+INFO_BAR_H   = 44
+TARGET_FPS   = 60
 # ─────────────────────────────────────────────────────────────────────────────
 
 ACTION_NAMES = ["NOOP", "UP", "DOWN", "LEFT", "RIGHT"]
 DIR_MAP      = {0:(0,0), 1:(0,-1), 2:(0,1), 3:(-1,0), 4:(1,0)}
+
+
+def compute_grid_layout(n: int, game_w: int, game_h: int):
+    """Best (cols, rows, cell_w, cell_h) so n cells fit in MAX_WINDOW,
+    each cell showing the full game surface scaled down uniformly."""
+    best = None
+    best_area = 0
+    for cols in range(1, n + 1):
+        rows  = math.ceil(n / cols)
+        scale = min((MAX_WINDOW_W // cols) / game_w,
+                    ((MAX_WINDOW_H - INFO_BAR_H) // rows) / game_h)
+        cw = int(game_w * scale)
+        ch = int(game_h * scale)
+        if cw < 40 or ch < 40:
+            continue
+        if cw * ch > best_area:
+            best_area = cw * ch
+            best = (cols, rows, cw, ch)
+    if best is None:
+        scale = min(MAX_WINDOW_W / (n * game_w), (MAX_WINDOW_H - INFO_BAR_H) / game_h)
+        cw = max(40, int(game_w * scale))
+        ch = max(40, int(game_h * scale))
+        best = (n, 1, cw, ch)
+    return best
 
 
 def _load_base_cfg() -> dict:
@@ -106,27 +129,23 @@ class GenomeRunner:
         mh  = eng.maze.height * ts
         pac = eng.pacman
 
+        # [0-3] Pac-Man
         obs = [pac.x / mw, pac.y / mh, float(pac.direction[0]), float(pac.direction[1])]
 
+        # [4-27] Ghosts — 6 values each: rel_x, rel_y, dist, dir_x, dir_y, threat
         for i in range(4):
             if i < len(eng.ghosts):
                 g  = eng.ghosts[i]
                 rx = (g.x - pac.x) / mw
                 ry = (g.y - pac.y) / mh
-                threat = 0.0
-                if g.state in (GhostState.CHASE, GhostState.SCATTER):
-                    threat = 1.0
-                elif g.state == GhostState.FRIGHTENED:
-                    threat = -1.0
-                obs.extend([rx, ry, (rx**2 + ry**2)**0.5, threat])
+                dist = (rx**2 + ry**2)**0.5
+                threat = (1.0 if g.state in (GhostState.CHASE, GhostState.SCATTER)
+                          else -1.0 if g.state == GhostState.FRIGHTENED else 0.0)
+                obs.extend([rx, ry, dist, float(g.current_dir[0]), float(g.current_dir[1]), threat])
             else:
-                obs.extend([0.0, 0.0, 1.0, 0.0])
+                obs.extend([0.0, 0.0, 1.5, 0.0, 0.0, 0.0])
 
-        total_p = len(eng.pellets) + eng.pellets_eaten_this_level
-        pellet_ratio = eng.pellets_eaten_this_level / max(total_p, 1)
-        frit_active  = 1.0 if eng.frightened_mode else 0.0
-        frit_time    = eng.frightened_timer / max(eng.frightened_duration, 1)
-
+        # [28-29] Nearest pellet radar
         all_p = eng.pellets + eng.power_pellets
         if all_p:
             dists = [(p[0]-pac.x)**2 + (p[1]-pac.y)**2 for p in all_p]
@@ -135,6 +154,7 @@ class GenomeRunner:
         else:
             obs.extend([0.0, 0.0])
 
+        # [30-33] Wall sensors
         cur_tx = int(pac.x / ts)
         cur_ty = int(pac.y / ts)
         for ddx, ddy in [(0,-1),(0,1),(-1,0),(1,0)]:
@@ -144,17 +164,15 @@ class GenomeRunner:
             else:
                 obs.append(1.0)
 
+        # [34-39] Global state
+        total_p      = max(eng.pellets_eaten_this_level + len(eng.pellets), 1)
+        pellet_ratio = eng.pellets_eaten_this_level / total_p
+        frit_active  = 1.0 if eng.frightened_mode else 0.0
+        frit_time    = eng.frightened_timer / max(eng.frightened_duration, 1)
+        pp_dist      = (min((p[0]-pac.x)**2 + (p[1]-pac.y)**2 for p in eng.power_pellets)**0.5 / mw
+                        if eng.power_pellets else 1.5)
         obs.extend([pellet_ratio, frit_active, frit_time,
-                    float(eng.lives / 3), float(eng.global_scatter_mode)])
-
-        # Nearest power pellet direction + count
-        if eng.power_pellets:
-            pp_dists = [(p[0]-pac.x)**2 + (p[1]-pac.y)**2 for p in eng.power_pellets]
-            cp = eng.power_pellets[pp_dists.index(min(pp_dists))]
-            obs.extend([(cp[0]-pac.x)/mw, (cp[1]-pac.y)/mh,
-                        len(eng.power_pellets) / max(len(eng.power_pellets), 1)])
-        else:
-            obs.extend([0.0, 0.0, 0.0])
+                    eng.lives / 3.0, 1.0 if eng.global_scatter_mode else 0.0, pp_dist])
 
         return obs
 
@@ -196,6 +214,7 @@ class GenomeRunner:
 
     # ── render this genome's game into its grid cell ──────────────────────────
     def draw_cell(self, window: pygame.Surface, col: int, row: int,
+                  cell_w: int, cell_h: int,
                   is_best: bool, label_font: pygame.font.Font):
         self._surf.fill((0, 0, 0))
         self.engine.draw(self._surf)
@@ -208,18 +227,16 @@ class GenomeRunner:
             self._surf.blit(dim, (0, 0))
 
         # Scale down to cell size
-        scaled = pygame.transform.scale(self._surf, (CELL_W, CELL_H))
+        scaled = pygame.transform.scale(self._surf, (cell_w, cell_h))
 
-        # Gold border for the current best genome
-        dest_x = col * CELL_W
-        dest_y = row * CELL_H
+        dest_x = col * cell_w
+        dest_y = row * cell_h
         window.blit(scaled, (dest_x, dest_y))
 
         if is_best:
             pygame.draw.rect(window, (255, 215, 0),
-                             (dest_x, dest_y, CELL_W, CELL_H), 3)
+                             (dest_x, dest_y, cell_w, cell_h), 3)
 
-        # Tiny fitness label
         color = (255, 215, 0) if is_best else ((80, 80, 80) if self.done else (200, 200, 200))
         lbl   = label_font.render(f"{self.total_reward:+.0f}", True, color)
         window.blit(lbl, (dest_x + 3, dest_y + 3))
@@ -297,18 +314,20 @@ def run(checkpoint=None):
         for g in genome_list:
             g.fitness = -9999.0
 
-        # Work out grid dimensions from population size
-        cols      = GRID_COLS
-        rows      = math.ceil(n / cols)
-        win_w     = cols * CELL_W
-        win_h     = rows * CELL_H + INFO_BAR_H
+        runners = [GenomeRunner(g, cfg, base_cfg) for g in genome_list]
+
+        # Compute grid from actual game surface size
+        game_w  = GenomeRunner._game_w
+        game_h  = GenomeRunner._game_h
+        cols, rows, cell_w, cell_h = compute_grid_layout(n, game_w, game_h)
+        win_w   = cols * cell_w
+        win_h   = rows * cell_h + INFO_BAR_H
 
         # Create / resize window
-        if window[0] is None:
+        if window[0] is None or window[0].get_size() != (win_w, win_h):
             window[0] = pygame.display.set_mode((win_w, win_h))
             pygame.display.set_caption("NEAT Pac-Man — Visual Training")
 
-        runners = [GenomeRunner(g, cfg, base_cfg) for g in genome_list]
         best_runner_idx = None
 
         while not all(r.done for r in runners):
@@ -331,22 +350,21 @@ def run(checkpoint=None):
                 best_runner_idx = max(alive, key=lambda i: runners[i].total_reward)
 
             # Draw grid
+            game_area_h = rows * cell_h
             window[0].fill((15, 15, 15))
             for idx, r in enumerate(runners):
-                col = idx % cols
-                row = idx // cols
-                r.draw_cell(window[0], col, row,
+                r.draw_cell(window[0], idx % cols, idx // cols,
+                            cell_w, cell_h,
                             is_best=(idx == best_runner_idx),
                             label_font=label_font)
 
             # Grid lines
-            game_area_h = rows * CELL_H
             for c in range(1, cols):
                 pygame.draw.line(window[0], (40, 40, 40),
-                                 (c*CELL_W, 0), (c*CELL_W, game_area_h))
+                                 (c*cell_w, 0), (c*cell_w, game_area_h))
             for r in range(1, rows):
                 pygame.draw.line(window[0], (40, 40, 40),
-                                 (0, r*CELL_H), (win_w, r*CELL_H))
+                                 (0, r*cell_h), (win_w, r*cell_h))
 
             # Info bar
             alive_count = sum(1 for r in runners if not r.done)

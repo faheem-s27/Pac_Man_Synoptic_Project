@@ -32,6 +32,7 @@ class GameEngine:
                  level=1, ghost_speed_increment=0.1,
                  maze_seed=None,
                  enable_sound=True,
+                 enable_power_pellets=True,
                  **kwargs):
         # Parse resolution string if provided
         if isinstance(window_resolution, str):
@@ -42,6 +43,7 @@ class GameEngine:
         self.tile_size = tile_size
         self.enable_ghosts = enable_ghosts
         self.god_mode = god_mode
+        self.enable_power_pellets = enable_power_pellets
         self.max_pellets = max_pellets  # legacy, unused — kept for **kwargs safety
         self.pellets_to_win = pellets_to_win  # -1 = eat all pellets to win
         self.pellets_eaten_this_level = 0
@@ -88,7 +90,7 @@ class GameEngine:
         self.game_over = False
         self.won = False
         self.pellets = self._initialize_pellets()
-        self.power_pellets = self._initialize_power_pellets()
+        self.power_pellets = self._initialize_power_pellets() if self.enable_power_pellets else []
         self.paused = paused
 
         self.pathfinding = Pathfinding(self.maze)
@@ -173,7 +175,7 @@ class GameEngine:
         self.maze = Maze(self.tile_size, width=self.maze.width, height=self.maze.height,
                          use_classic=self.use_classic_maze, algorithm=self.maze_algorithm, seed=self.maze_seed)
         self.pellets = self._initialize_pellets()
-        self.power_pellets = self._initialize_power_pellets()
+        self.power_pellets = self._initialize_power_pellets() if self.enable_power_pellets else []
 
         # Reset pacman and ghost positions
         self.won = False
