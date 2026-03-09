@@ -34,7 +34,7 @@ from Code.Settings  import Settings
 _SETTINGS      = Settings(os.path.join(_HERE, "game_settings.json")).get_all()
 MAZE_ALGORITHM = "recursive_backtracking"
 CONFIG_PATH    = os.path.join(_HERE, "neat_config.cfg")
-ACTION_NAMES   = {0: "NOOP", 1: "UP", 2: "DOWN", 3: "LEFT", 4: "RIGHT"}
+ACTION_NAMES   = {0: "UP", 1: "DOWN", 2: "LEFT", 3: "RIGHT"}
 
 
 def replay(genome_path: str, test_generalisation: bool):
