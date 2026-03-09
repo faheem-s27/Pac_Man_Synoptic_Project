@@ -78,11 +78,11 @@ class PacManEnv(gym.Env):
     }
 
     # Action constants
-    NOOP  = 0
-    UP    = 1
-    DOWN  = 2
-    LEFT  = 3
-    RIGHT = 4
+    # NOOP  = 0
+    UP    = 0
+    DOWN  = 1
+    LEFT  = 2
+    RIGHT = 3
 
     _ACTION_MAP = {
         # NOOP:  (0,  0),
