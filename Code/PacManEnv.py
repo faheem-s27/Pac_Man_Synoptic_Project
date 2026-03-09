@@ -248,6 +248,34 @@ class PacManEnv(gym.Env):
 
         self._pygame_initialised = True
 
+    def _draw_debug_sensors(self):
+        """Visualizes the AI's 40-element input vector on the screen."""
+        if self._screen is None: return
+
+        eng = self._engine
+        pac_pos = (eng.pacman.x, eng.pacman.y)
+
+        # 1. Draw line to Nearest Pellet (Vector index 28-29)
+        if eng.pellets or eng.power_pellets:
+            all_p = eng.pellets + eng.power_pellets
+            dists = [(p[0] - pac_pos[0]) ** 2 + (p[1] - pac_pos[1]) ** 2 for p in all_p]
+            target_p = all_p[np.argmin(dists)]
+            # Draw GREEN line for pellets
+            pygame.draw.line(self._screen, (0, 255, 0), pac_pos, (target_p[0], target_p[1]), 2)
+
+        # 2. Draw lines to Ghosts (Vector index 4-27)
+        for i, g in enumerate(eng.ghosts):
+            color = (255, 0, 0) if g.state != GhostState.FRIGHTENED else (0, 0, 255)
+            # Draw RED line for threats, BLUE for edible ghosts
+            pygame.draw.line(self._screen, color, pac_pos, (g.x, g.y), 2)
+
+        # 3. Draw Wall Sensors (Vector index 30-33)
+        ts = eng.tile_size
+        for i, (dx, dy) in enumerate([(0, -ts), (0, ts), (-ts, 0), (ts, 0)]):
+            sensor_pos = (pac_pos[0] + dx, pac_pos[1] + dy)
+            # Draw small YELLOW circles if a wall is detected nearby
+            pygame.draw.circle(self._screen, (255, 255, 0), sensor_pos, 5, 1)
+
     def _render_human(self):
         """Draw one frame to the visible window and pump events."""
         if self._screen is None or self._engine is None:
@@ -261,6 +289,7 @@ class PacManEnv(gym.Env):
 
         self._screen.fill((0, 0, 0))
         self._engine.draw(self._screen)
+        self._draw_debug_sensors()
         pygame.display.flip()
 
         if self._clock:
