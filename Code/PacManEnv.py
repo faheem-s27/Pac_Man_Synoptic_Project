@@ -201,17 +201,18 @@ class PacManEnv(gym.Env):
         self._step_count += 1
 
         # Reward logic
-        reward = -0.1  # Step penalty
+        reward = -0.05  # Step penalty
         score_delta = self._engine.pacman.score - self._prev_score
-        reward += float(score_delta)
+        if score_delta > 0:
+            reward += float(score_delta) / 10.0
         self._prev_score = self._engine.pacman.score
 
         if self._engine.lives < self._prev_lives:
-            reward -= 500.0
+            reward -= 50.0
             self._prev_lives = self._engine.lives
 
         if self._engine.won and not self._won_already:
-            reward += 1000.0  # High win bonus
+            reward += 100.0  # High win bonus
             self._won_already = True
             self._levels_completed += 1
             self._engine.next_level()
@@ -220,7 +221,7 @@ class PacManEnv(gym.Env):
 
         terminated = self._engine.game_over
         truncated = (self._step_count >= self.max_episode_steps)
-        if terminated: reward -= 500.0
+        if terminated: reward -= 50.0
 
         if self.render_mode == "human": self._render_human()
         return self._get_obs(), reward, terminated, truncated, self._get_info()

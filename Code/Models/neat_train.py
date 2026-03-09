@@ -50,7 +50,9 @@ def eval_genome(genome, config):
     # Track performance across the battery of tests
     fitness_scores = []
 
-    for seed in EVALUATION_SEEDS:
+    eval_seeds = [np.random.randint(0, 10000) for _ in range(3)]
+
+    for seed in eval_seeds:
         env = PacManEnv(
             render_mode=None,
             obs_type="vector",
