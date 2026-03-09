@@ -23,7 +23,7 @@ Discrete(5):
 
 Reward Architecture (Scaled for Network Stability)
 --------------------------------------------------
-  + (score_delta / 10.0) : Reward for eating pellets, power pellets, and ghosts.
+  + (score_delta / 2.0)  : Reward for eating pellets, power pellets, and ghosts.
   - 0.05                 : Step penalty to encourage movement efficiency.
   - 50.0                 : Life lost penalty.
   - 50.0                 : Game over penalty (terminal state).
@@ -85,7 +85,7 @@ class PacManEnv(gym.Env):
     RIGHT = 4
 
     _ACTION_MAP = {
-        NOOP:  (0,  0),
+        # NOOP:  (0,  0),
         UP:    (0, -1),
         DOWN:  (0,  1),
         LEFT:  (-1, 0),
@@ -125,8 +125,7 @@ class PacManEnv(gym.Env):
         self._clock = None
         self._engine = None
 
-        self.action_space = spaces.Discrete(5)
-        self._ACTION_MAP = {0: (0, 0), 1: (0, -1), 2: (0, 1), 3: (-1, 0), 4: (1, 0)}
+        self.action_space = spaces.Discrete(4)
 
         if self.obs_type == "pixels":
             res_str = self._base_cfg.get("window_resolution", "800x800")
@@ -218,20 +217,14 @@ class PacManEnv(gym.Env):
     # ── Internal helpers ──────────────────────────────────────────────────────
 
     def _ensure_pygame(self):
-        """Initialise pygame once, creating a window only for human mode.
-        In headless mode (render_mode=None) we skip pygame display/surface
-        entirely so images are never loaded and no drawing ever happens."""
+        """Initialise pygame once, creating a window only for human mode."""
         if self._pygame_initialised:
             return
 
         if self.render_mode is None:
-            # Headless: use dummy drivers so pygame.init() doesn't open a
-            # window or touch audio hardware.  We still call init() because
-            # some pygame modules (e.g. font) are needed by GameEngine.
             os.environ.setdefault("SDL_AUDIODRIVER", "dummy")
             os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
             pygame.init()
-            # No surface — GameEngine.draw(None) is a no-op
             self._screen = None
         elif self.render_mode == "human":
             pygame.init()
@@ -240,7 +233,7 @@ class PacManEnv(gym.Env):
             self._screen = pygame.display.set_mode((w, h))
             pygame.display.set_caption("Pac-Man Gym Environment")
             self._clock  = pygame.time.Clock()
-        else:  # rgb_array — off-screen surface
+        else:
             pygame.init()
             res_str = self._base_cfg.get("window_resolution", "800x800")
             w, h    = self._parse_res(res_str)
@@ -249,39 +242,45 @@ class PacManEnv(gym.Env):
         self._pygame_initialised = True
 
     def _draw_debug_sensors(self):
-        """Visualizes the AI's 40-element input vector on the screen."""
-        if self._screen is None: return
+        """Visualizes the AI's 40-element input vector strictly using center-mass math."""
+        if self._screen is None or self._engine is None:
+            return
 
         eng = self._engine
-        pac_pos = (eng.pacman.x, eng.pacman.y)
+        ts = eng.tile_size
 
-        # 1. Draw line to Nearest Pellet (Vector index 28-29)
+        # Center Mass Anchor
+        pac_cx = int(eng.pacman.x + (ts / 2))
+        pac_cy = int(eng.pacman.y + (ts / 2))
+        pac_center = (pac_cx, pac_cy)
+
+        # 1. Pellet Radar (Green)
         if eng.pellets or eng.power_pellets:
             all_p = eng.pellets + eng.power_pellets
-            dists = [(p[0] - pac_pos[0]) ** 2 + (p[1] - pac_pos[1]) ** 2 for p in all_p]
-            target_p = all_p[np.argmin(dists)]
-            # Draw GREEN line for pellets
-            pygame.draw.line(self._screen, (0, 255, 0), pac_pos, (target_p[0], target_p[1]), 2)
+            # ACTION: p is already in pixels. Just shift to center-mass.
+            px_coords = [(int(p[0] + (ts / 2)), int(p[1] + (ts / 2))) for p in all_p]
+            dists = [(px[0] - pac_cx) ** 2 + (px[1] - pac_cy) ** 2 for px in px_coords]
+            target_px = px_coords[np.argmin(dists)]
+            pygame.draw.line(self._screen, (0, 255, 0), pac_center, target_px, 2)
 
-        # 2. Draw lines to Ghosts (Vector index 4-27)
-        for i, g in enumerate(eng.ghosts):
-            color = (255, 0, 0) if g.state != GhostState.FRIGHTENED else (0, 0, 255)
-            # Draw RED line for threats, BLUE for edible ghosts
-            pygame.draw.line(self._screen, color, pac_pos, (g.x, g.y), 2)
+        # 2. Ghost Tracking
+        for g in eng.ghosts:
+            color = (255, 0, 0) if g.state in [GhostState.CHASE, GhostState.SCATTER] else (0, 255, 255)
+            g_center = (int(g.x + (ts / 2)), int(g.y + (ts / 2)))
+            pygame.draw.line(self._screen, color, pac_center, g_center, 1)
 
-        # 3. Draw Wall Sensors (Vector index 30-33)
-        ts = eng.tile_size
-        for i, (dx, dy) in enumerate([(0, -ts), (0, ts), (-ts, 0), (ts, 0)]):
-            sensor_pos = (pac_pos[0] + dx, pac_pos[1] + dy)
-            # Draw small YELLOW circles if a wall is detected nearby
-            pygame.draw.circle(self._screen, (255, 255, 0), sensor_pos, 5, 1)
+        # 3. Wall Sensors
+        for dx, dy in [(0, -ts), (0, ts), (-ts, 0), (ts, 0)]:
+            sensor_px = (pac_cx + dx, pac_cy + dy)
+            tx, ty = int(sensor_px[0] / ts), int(sensor_px[1] / ts)
+            if not (0 <= tx < eng.maze.width and 0 <= ty < eng.maze.height) or eng.maze.maze[ty][tx] == 1:
+                pygame.draw.circle(self._screen, (255, 255, 0), sensor_px, 5, 1)
 
     def _render_human(self):
         """Draw one frame to the visible window and pump events."""
         if self._screen is None or self._engine is None:
             return
 
-        # Pump events so the OS doesn't think the window is frozen
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 self.close()
@@ -289,6 +288,8 @@ class PacManEnv(gym.Env):
 
         self._screen.fill((0, 0, 0))
         self._engine.draw(self._screen)
+
+        # Active overlay
         self._draw_debug_sensors()
         pygame.display.flip()
 
@@ -296,15 +297,12 @@ class PacManEnv(gym.Env):
             self._clock.tick(self.metadata["render_fps"])
 
     def _get_pixel_obs(self) -> np.ndarray:
-        """Render to off-screen surface and return as HxWx3 uint8 array."""
         if self._screen is None:
-            # Headless — return a blank array matching the declared obs shape
             h, w = self.observation_space.shape[:2]
             return np.zeros((h, w, 3), dtype=np.uint8)
         surf = self._screen
         surf.fill((0, 0, 0))
         self._engine.draw(surf)
-        # pygame.surfarray returns WxHx3; transpose to HxWx3
         arr = pygame.surfarray.array3d(surf)
         return np.transpose(arr, (1, 0, 2))
 
@@ -315,45 +313,60 @@ class PacManEnv(gym.Env):
 
     def _get_vector_obs(self) -> np.ndarray:
         eng = self._engine
-        ts, mw_px, mh_px = eng.tile_size, eng.maze.width * eng.tile_size, eng.maze.height * eng.tile_size
+        ts = eng.tile_size
+        mw_px, mh_px = eng.maze.width * ts, eng.maze.height * ts
+
+        # ACTION: Establish strict center-mass for neural network inputs
+        pac_cx = eng.pacman.x + (ts / 2.0)
+        pac_cy = eng.pacman.y + (ts / 2.0)
 
         # [0-3] Pac-Man
-        obs = [eng.pacman.x / mw_px, eng.pacman.y / mh_px, float(eng.pacman.direction[0]),
-               float(eng.pacman.direction[1])]
+        obs = [pac_cx / mw_px, pac_cy / mh_px, float(eng.pacman.direction[0]), float(eng.pacman.direction[1])]
 
-        # [4-27] Ghosts (6 features each)
+        # [4-27] Ghosts
         for i in range(4):
             if i < len(eng.ghosts):
                 g = eng.ghosts[i]
-                rel_x, rel_y = (g.x - eng.pacman.x) / mw_px, (g.y - eng.pacman.y) / mh_px
+                g_cx = g.x + (ts / 2.0)
+                g_cy = g.y + (ts / 2.0)
+
+                rel_x = (g_cx - pac_cx) / mw_px
+                rel_y = (g_cy - pac_cy) / mh_px
                 dist = np.sqrt(rel_x ** 2 + rel_y ** 2)
+
                 threat = 1.0 if g.state in [GhostState.CHASE, GhostState.SCATTER] else (
                     -1.0 if g.state == GhostState.FRIGHTENED else 0.0)
                 obs.extend([rel_x, rel_y, dist, float(g.current_dir[0]), float(g.current_dir[1]), threat])
             else:
                 obs.extend([0.0, 0.0, 1.5, 0.0, 0.0, 0.0])
 
-        # [28-29] Pellet Radar
+        # [28-29] Pellet Radar (Center Mass Distance)
         p_rel = [0.0, 0.0]
         if eng.pellets or eng.power_pellets:
             all_p = eng.pellets + eng.power_pellets
-            dists = [(p[0] - eng.pacman.x) ** 2 + (p[1] - eng.pacman.y) ** 2 for p in all_p]
-            cp = all_p[np.argmin(dists)]
-            p_rel = [(cp[0] - eng.pacman.x) / mw_px, (cp[1] - eng.pacman.y) / mh_px]
+            # ACTION: p is already in pixels. Just shift to center-mass.
+            px_coords = [(p[0] + (ts / 2.0), p[1] + (ts / 2.0)) for p in all_p]
+            dists = [(px[0] - pac_cx) ** 2 + (px[1] - pac_cy) ** 2 for px in px_coords]
+
+            target_px = px_coords[int(np.argmin(dists))]
+            p_rel = [(target_px[0] - pac_cx) / mw_px, (target_px[1] - pac_cy) / mh_px]
         obs.extend(p_rel)
 
-        # [30-33] Walls
-        tx, ty = int(eng.pacman.x / ts), int(eng.pacman.y / ts)
+        # [30-33] Walls (Center Mass Boundary Checking)
+        tx, ty = int(pac_cx / ts), int(pac_cy / ts)
         for dx, dy in [(0, -1), (0, 1), (-1, 0), (1, 0)]:
             nx, ny = tx + dx, ty + dy
-            is_wall = 1.0 if not (0 <= nx < eng.maze.width and 0 <= ny < eng.maze.height) or eng.maze.maze[ny][
-                nx] == 1 else 0.0
+            is_wall = 1.0 if not (0 <= nx < eng.maze.width and 0 <= ny < eng.maze.height) or eng.maze.maze[ny][nx] == 1 else 0.0
             obs.append(is_wall)
 
         # [34-39] Global
         total_p = max(eng.pellets_eaten_this_level + len(eng.pellets), 1)
-        pp_dist = np.sqrt(min([(p[0] - eng.pacman.x) ** 2 + (p[1] - eng.pacman.y) ** 2 for p in
-                               eng.power_pellets])) / mw_px if eng.power_pellets else 1.5
+        pp_dist = 1.5
+        if eng.power_pellets:
+            pp_coords = [(p[0] + (ts / 2.0), p[1] + (ts / 2.0)) for p in eng.power_pellets]
+            pp_dists = [(px[0] - pac_cx) ** 2 + (px[1] - pac_cy) ** 2 for px in pp_coords]
+            pp_dist = np.sqrt(min(pp_dists)) / mw_px
+
         obs.extend([eng.pellets_eaten_this_level / total_p, 1.0 if eng.frightened_mode else 0.0,
                     eng.frightened_timer / max(eng.frightened_duration, 1), eng.lives / 3.0,
                     1.0 if eng.global_scatter_mode else 0.0, pp_dist])
@@ -389,11 +402,9 @@ class PacManEnv(gym.Env):
 if __name__ == "__main__":
     print("Running PacManEnv smoke-test (headless)...\n")
 
-    # ── 1. Basic sanity: 100 random steps ────────────────────────────────────
     env = PacManEnv(render_mode=None, obs_type="vector", maze_seed=None)
     obs, info = env.reset()
     print(f"  obs shape : {obs.shape}")
-    print(f"  info      : {info}")
 
     total_reward = 0.0
     for step_i in range(100):
@@ -428,4 +439,3 @@ if __name__ == "__main__":
     print(f"  Different seeds give different obs: {different}")
 
     print("\nSmoke-test passed ✓")
-
