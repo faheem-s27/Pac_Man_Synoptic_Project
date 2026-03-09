@@ -5,11 +5,11 @@ Load a saved NEAT genome and watch it play Pac-Man in a visible window.
 
 Usage
 -----
-    # Watch the best genome found so far
-    python -m Code.neat_replay
+    # Watch the best genome on the default settings map
+    python -m Code.neat_replay --genome checkpoints/best_genome.pkl
 
-    # Watch a specific genome file
-    python -m Code.neat_replay --genome checkpoints/winner_genome.pkl
+    # Prove Generalisation: Watch the genome on a completely random, unseen map
+    python -m Code.neat_replay --genome checkpoints/best_genome.pkl --random
 """
 
 import os
@@ -17,6 +17,8 @@ import sys
 import pickle
 import argparse
 import time
+import numpy as np
+import random
 
 import neat
 
@@ -30,13 +32,12 @@ from Code.Settings  import Settings
 
 # ── Config ───────────────────────────────────────────────────────────────────
 _SETTINGS      = Settings(os.path.join(_HERE, "game_settings.json")).get_all()
-MAZE_SEED      = _SETTINGS.get("maze_seed", None)
 MAZE_ALGORITHM = "recursive_backtracking"
 CONFIG_PATH    = os.path.join(_HERE, "neat_config.cfg")
 ACTION_NAMES   = {0: "NOOP", 1: "UP", 2: "DOWN", 3: "LEFT", 4: "RIGHT"}
 
 
-def replay(genome_path: str):
+def replay(genome_path: str, test_generalisation: bool):
     if not os.path.exists(genome_path):
         print(f"[ERROR] Genome file not found: {genome_path}")
         sys.exit(1)
@@ -60,15 +61,20 @@ def replay(genome_path: str):
     )
     net = neat.nn.FeedForwardNetwork.create(genome, config)
 
+    # Determine seed for generalisation testing
+    eval_seed = random.randint(0, 999999) if test_generalisation else _SETTINGS.get("maze_seed", None)
+    if test_generalisation:
+        print(f"  [!] Zero-Shot Generalisation Test Activated. Procedural Seed: {eval_seed}")
+
     # Run with rendering
     env = PacManEnv(
         render_mode="human",
         obs_type="vector",
-        maze_seed=MAZE_SEED,
+        maze_seed=eval_seed,
         maze_algorithm=MAZE_ALGORITHM,
     )
 
-    obs, info = env.reset()
+    obs, _ = env.reset()
     total_reward = 0.0
     step = 0
 
@@ -76,8 +82,9 @@ def replay(genome_path: str):
 
     try:
         while True:
+            # Replaced native Python indexing with NumPy argmax for mathematical consistency
             outputs = net.activate(obs.tolist())
-            action  = outputs.index(max(outputs))
+            action = int(np.argmax(outputs))
 
             obs, reward, terminated, truncated, info = env.step(action)
             total_reward += reward
@@ -107,10 +114,13 @@ if __name__ == "__main__":
     parser.add_argument(
         "--genome",
         type=str,
-        default=os.path.join(_HERE, "checkpoints", "winner_genome.pkl"),
-        # default=os.path.join(_HERE, "checkpoints", "best_genome.pkl"),
+        default=os.path.join(_HERE, "checkpoints", "best_genome.pkl"),
         help="Path to the pickled genome file",
     )
+    parser.add_argument(
+        "--random",
+        action="store_true",
+        help="Test zero-shot generalisation by generating a completely random, unseen map.",
+    )
     args = parser.parse_args()
-    replay(args.genome)
-
+    replay(args.genome, args.random)

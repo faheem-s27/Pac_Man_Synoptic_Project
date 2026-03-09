@@ -5,22 +5,12 @@ A Gymnasium-compatible environment that wraps the existing Pac-Man GameEngine.
 
 Observation Space
 -----------------
-A flat numpy array of 34 floats:
-  [0-1]     pacman pos x, y           (normalised 0-1)
-  [2-3]     pacman dir dx, dy         (-1, 0, 1)
-  [4-7]     ghost_0  rel_x, rel_y, dist, threat
-  [8-11]    ghost_1  rel_x, rel_y, dist, threat
-  [12-15]   ghost_2  rel_x, rel_y, dist, threat
-  [16-19]   ghost_3  rel_x, rel_y, dist, threat
-  [20-21]   nearest pellet  rel_x, rel_y
-  [22-25]   wall sensors    up, down, left, right  (1=wall)
-  [26]      pellet_ratio eaten  (0-1)
-  [27]      frightened_mode active  (0 or 1)
-  [28]      frightened_timer_ratio  (0-1)
-  [29]      lives / 3
-  [30]      global_scatter_mode  (0 or 1)
-  [31-32]   nearest power pellet rel_x, rel_y  (0,0 if none left)
-  [33]      power pellets remaining (normalised 0-1)
+A flat numpy array of 40 floats (normalised between -1.0 and 1.0):
+  [0-3]     Pac-Man State: pos_x, pos_y, dir_dx, dir_dy
+  [4-27]    Ghosts (x4): rel_x, rel_y, dist, dir_dx, dir_dy, threat_level
+  [28-29]   Pellet Radar: nearest_pellet_rel_x, nearest_pellet_rel_y
+  [30-33]   Wall Sensors: up, down, left, right (1.0 if wall, 0.0 otherwise)
+  [34-39]   Global State: pellet_ratio, frightened_active, frightened_timer, lives_ratio, scatter_mode, pp_dist
 
 Action Space
 ------------
@@ -31,39 +21,19 @@ Discrete(5):
   3 → LEFT
   4 → RIGHT
 
-Reward
-------
-  +pellet_value   when a pellet is eaten
-  +ghost_value    when a ghost is eaten (200 / 400 / 800 / 1600 combo)
-  -100            when a life is lost
-  +500            when a level is won  (episode continues on a fresh maze)
-  -500            when game over (no lives left)  → episode terminates
-  +0              otherwise
+Reward Architecture (Scaled for Network Stability)
+--------------------------------------------------
+  + (score_delta / 10.0) : Reward for eating pellets, power pellets, and ghosts.
+  - 0.05                 : Step penalty to encourage movement efficiency.
+  - 50.0                 : Life lost penalty.
+  - 50.0                 : Game over penalty (terminal state).
+  + 100.0                : Level cleared bonus.
 
-Level completion
+Level Completion
 ----------------
-Winning a level does NOT terminate the episode. Instead the engine
-auto-advances (next_level()) giving a new procedurally-generated maze and
-slightly faster ghosts. The episode only ends on game-over or truncation.
-info["levels_completed"] tracks how many mazes have been cleared.
-
-Usage
------
-    from Code.PacManEnv import PacManEnv
-
-    env = PacManEnv(render_mode="human")           # shows the pygame window
-    env = PacManEnv(render_mode="rgb_array")        # returns pixels in step()
-    env = PacManEnv(render_mode=None)               # headless / fastest
-
-    # Fixed maze — same layout every reset() (great for training)
-    env = PacManEnv(render_mode=None, maze_seed=42)
-
-    # Random maze — different layout every reset() (great for evaluation)
-    env = PacManEnv(render_mode=None, maze_seed=None)
-
-    obs, info = env.reset()
-    obs, reward, terminated, truncated, info = env.step(action)
-    env.close()
+Winning a level does NOT terminate the episode. Instead, the engine auto-advances
+(next_level()), generating a new procedurally-generated maze to enforce generalisation.
+The episode only ends on game-over or truncation.
 """
 
 import sys
@@ -204,7 +174,7 @@ class PacManEnv(gym.Env):
         reward = -0.05  # Step penalty
         score_delta = self._engine.pacman.score - self._prev_score
         if score_delta > 0:
-            reward += float(score_delta) / 10.0
+            reward += float(score_delta) / 2.0
         self._prev_score = self._engine.pacman.score
 
         if self._engine.lives < self._prev_lives:

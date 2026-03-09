@@ -38,6 +38,8 @@ class GameEngine:
         if isinstance(window_resolution, str):
             screen_width, screen_height = parse_resolution(window_resolution)
 
+        self.debug_logs = False
+
         self.screen_width = screen_width
         self.screen_height = screen_height
         self.tile_size = tile_size
@@ -57,8 +59,11 @@ class GameEngine:
         self.base_ghost_speed = resolved_ghost_speed
         # Each level beyond 1 adds ghost_speed_increment to ghost speed
         self.ghost_speed = resolved_ghost_speed + (level - 1) * ghost_speed_increment
-        print(f"[Speed] Pac-Man: {pacman_speed}, Ghost base: {resolved_ghost_speed:.2f}, "
-              f"Level {level} ghost speed: {self.ghost_speed:.2f}")
+
+        # ----------------------- RE-ENABLE LATER ----------------------
+        if self.debug_logs:
+            print(f"[Speed] Pac-Man: {pacman_speed}, Ghost base: {resolved_ghost_speed:.2f}, "
+                  f"Level {level} ghost speed: {self.ghost_speed:.2f}")
 
         # Global scatter/chase mode — must be set before _initialize_ghosts
         self.always_chase = always_chase
@@ -360,8 +365,10 @@ class GameEngine:
                                     y * self.tile_size + self.tile_size // 2))
 
         total_possible = len(pellets)
-        print(f"[Pellets] Placing all {total_possible} pellets. "
-              f"Pellets to win: {'all' if self.pellets_to_win < 0 else self.pellets_to_win}.")
+
+        if self.debug_logs:
+            print(f"[Pellets] Placing all {total_possible} pellets. "
+                  f"Pellets to win: {'all' if self.pellets_to_win < 0 else self.pellets_to_win}.")
         return pellets
 
     def _initialize_power_pellets(self):
@@ -462,8 +469,8 @@ class GameEngine:
 
                             found = True
                             break
-
-        print(f"Power Pellets: {len(power_pellets)} placed (maze: {self.maze.width}x{self.maze.height}, tile: {self.tile_size}px)")
+        if self.debug_logs:
+            print(f"Power Pellets: {len(power_pellets)} placed (maze: {self.maze.width}x{self.maze.height}, tile: {self.tile_size}px)")
         return power_pellets
 
     def handle_input(self, event):
