@@ -179,15 +179,26 @@ class PacManEnv(gym.Env):
         return self._get_obs(), {}
 
     def step(self, action: int):
-        direction = self._ACTION_MAP[int(action)]
-        if direction != (0, 0):
-            self._engine.pacman.set_direction(direction)
+        new_direction = self._ACTION_MAP[int(action)]
+        current_direction = self._engine.pacman.direction
 
+        # ACTION: The Intent Buffer
+        # If the AI wants to turn, check if the turn is valid.
+        if new_direction != current_direction:
+            # We use next_direction to queue the turn. The GameEngine will execute
+            # it when the grid alignment allows, preventing sub-pixel wall snags.
+            self._engine.pacman.next_direction = new_direction
+
+            # If Pac-Man is currently stopped (e.g. at a dead end), try to force the move
+            if current_direction == (0, 0):
+                self._engine.pacman.set_direction(new_direction)
+
+        # Step the engine
         self._engine.update()
         self._step_count += 1
 
         # Reward logic
-        reward = -0.05  # Step penalty
+        reward = -0.01  # Step penalty
         score_delta = self._engine.pacman.score - self._prev_score
         if score_delta > 0:
             reward += float(score_delta) / 2.0

@@ -18,50 +18,49 @@ class CurriculumManager:
         """
         settings = self.base_settings.copy()
 
-        # --- STAGE 1: Baby Steps (Gens 0-9) ---
-        # Goal: Learn to move and eat. No danger.
-        if generation_id < 10:
+        # --- STAGE 1: Baby Steps (Gens 0-19) ---
+        if generation_id < 20:
             print(f"--- CURRICULUM STAGE 1 (Gen {generation_id}): Eat 10 Pellets, No Ghosts, 1 Life ---")
             settings['enable_ghosts'] = False
             settings['pellets_to_win'] = 10
-            settings['lives'] = 1  # Fail fast if they get stuck
+            settings['lives'] = 1
             settings['active_ghost_count'] = 0
+            settings['enable_power_pellets'] = False  # ACTION: Remove the perimeter exploit
 
-        # --- STAGE 2: Endurance (Gens 10-24) ---
-        # Goal: Learn to clear the whole map. No danger.
-        elif generation_id < 25:
+        # --- STAGE 2: Spatial Mastery (Gens 20-74) ---
+        elif generation_id < 75:
             print(f"--- CURRICULUM STAGE 2 (Gen {generation_id}): Clear Map, No Ghosts ---")
             settings['enable_ghosts'] = False
-            settings['pellets_to_win'] = -1  # -1 means "eat all"
+            settings['pellets_to_win'] = -1
             settings['active_ghost_count'] = 0
             settings['lives'] = 1
+            settings['enable_power_pellets'] = False  # ACTION: Force internal maze navigation
 
-        # --- STAGE 3: Introduction to Fear (Gens 25-39) ---
-        # Goal: Eat all pellets while avoiding ONE ghost (usually Blinky).
-        elif generation_id < 40:
+        # --- STAGE 3: Introduction to Fear (Gens 75-119) ---
+        elif generation_id < 120:
             print(f"--- CURRICULUM STAGE 3 (Gen {generation_id}): Clear Map, 1 Ghost ---")
             settings['enable_ghosts'] = True
             settings['pellets_to_win'] = -1
             settings['active_ghost_count'] = 1
             settings['lives'] = 1
+            settings['enable_power_pellets'] = True  # ACTION: Restore for threat mitigation
 
-        # --- STAGE 4: Rising Difficulty (Gens 40-54) ---
-        # Goal: Handle 2 ghosts.
-        elif generation_id < 55:
+        # --- STAGE 4: Rising Difficulty (Gens 120-159) ---
+        elif generation_id < 160:
             print(f"--- CURRICULUM STAGE 4 (Gen {generation_id}): Clear Map, 2 Ghosts ---")
             settings['enable_ghosts'] = True
             settings['pellets_to_win'] = -1
             settings['active_ghost_count'] = 2
             settings['lives'] = 2
+            settings['enable_power_pellets'] = True
 
-        # --- STAGE 5: Full Game (Gens 55+) ---
-        # Goal: Standard Pacman gameplay with all 4 ghosts.
+        # --- STAGE 5: Full Game (Gens 160+) ---
         else:
             print(f"--- CURRICULUM STAGE 5 (Gen {generation_id}): Full Difficulty (4 Ghosts) ---")
             settings['enable_ghosts'] = True
             settings['pellets_to_win'] = -1
             settings['active_ghost_count'] = 4
             settings['lives'] = 3
+            settings['enable_power_pellets'] = True
 
         return settings
-

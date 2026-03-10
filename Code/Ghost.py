@@ -107,7 +107,7 @@ class Ghost:
                 frames = self._load_gif_frames(gif_path)
                 if frames:
                     self.ghost_images[direction] = frames
-                    print(f"Loaded {len(frames)} frames for {self.name} {direction} animation")
+                    #print(f"Loaded {len(frames)} frames for {self.name} {direction} animation")
             except Exception as e:
                 print(f"Note: Could not load {self.name} {direction} GIF: {e}")
 
@@ -116,7 +116,7 @@ class Ghost:
             frames = self._load_gif_frames(frightened_path)
             if frames:
                 self.frightened_images = frames
-                print(f"Loaded {len(frames)} frames for frightened ghost animation")
+                #print(f"Loaded {len(frames)} frames for frightened ghost animation")
         except Exception:
             print("Note: Could not load frightened ghost GIF")
 

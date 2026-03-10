@@ -96,7 +96,8 @@ def main():
             pygame.mixer.music.load("../Audio/pacman_intermission.wav")
             menu_music_loaded = True
         except Exception as e:
-            print(f"Audio Warning (Menu): {e}")
+            #print(f"Audio Warning (Menu): {e}")
+            pass
 
     run = True
     while run:
@@ -124,7 +125,8 @@ def main():
                             pygame.mixer.music.play()
                             intro_played = True
                         except Exception as e:
-                            print(f"Audio Warning: {e}. Skipping intro.")
+                            #print(f"Audio Warning: {e}. Skipping intro.")
+                            pass
                     if intro_played:
                         current_state = GameState.AUDIO_PLAYING
                         game_engine = GameEngine(**game_config, paused=True)

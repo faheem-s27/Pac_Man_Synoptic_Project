@@ -61,7 +61,7 @@ def replay(genome_path: str, test_generalisation: bool, generation: int):
         neat.DefaultStagnation,
         CONFIG_PATH,
     )
-    net = neat.nn.RecurrentNetwork.create(genome, config)
+    net = neat.nn.FeedForwardNetwork.create(genome, config)
 
     # Determine seed for generalisation testing
     eval_seed = random.randint(0, 999999) if test_generalisation else _SETTINGS.get("maze_seed", None)
@@ -128,7 +128,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--generation",
         type=int,
-        default=9,
+        default=100,
         help="Simulate the curriculum difficulty of this generation (default: 100 - full difficulty)",
     )
     parser.add_argument(

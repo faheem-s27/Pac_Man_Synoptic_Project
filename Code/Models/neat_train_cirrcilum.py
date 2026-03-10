@@ -43,7 +43,7 @@ CURRICULUM = CurriculumManager()
 # ── Config ───────────────────────────────────────────────────────────────────
 # We define a static evaluation suite to ensure fair comparison across generations
 MAX_STEPS        = 3_500          # Increased to allow for multi-level survival
-NUM_GENERATIONS  = 200
+NUM_GENERATIONS  = 400
 CHECKPOINT_DIR   = os.path.join(_HERE, "checkpoints")
 CONFIG_PATH      = os.path.join(_HERE, "neat_config.cfg") # Matched your previous filename
 PARALLEL         = True
@@ -152,7 +152,7 @@ def eval_genome(genome, config):
     Evaluates a genome across multiple procedurally generated mazes.
     Returns the mean fitness to enforce generalisation over memorisation.
     """
-    net = neat.nn.RecurrentNetwork.create(genome, config)
+    net = neat.nn.FeedForwardNetwork.create(genome, config)
 
     # Track performance across the battery of tests
     fitness_scores = []

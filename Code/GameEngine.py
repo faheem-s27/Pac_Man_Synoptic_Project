@@ -137,31 +137,37 @@ class GameEngine:
                 ]
                 self.pellet_channel = pygame.mixer.Channel(0)
             except Exception as e:
-                print(f"Audio Warning (pellet): {e}")
+                #print(f"Audio Warning (pellet): {e}")
+                pass
 
             try:
                 self.death_sound = pygame.mixer.Sound("../Audio/pacman_death.mp3")
                 self.death_channel = pygame.mixer.Channel(1)
             except Exception as e:
-                print(f"Audio Warning (death): {e}")
+                #   print(f"Audio Warning (death): {e}")
+                pass
+
 
             try:
                 self.ghost_turn_blue_sound = pygame.mixer.Sound("../Audio/ghost_turn_blue.mp3")
                 self.ghost_turn_blue_channel = pygame.mixer.Channel(2)
             except Exception as e:
-                print(f"Audio Warning (ghost turn blue): {e}")
+                #print(f"Audio Warning (ghost turn blue): {e}")
+                pass
 
             try:
                 self.ghost_return_to_cage_sound = pygame.mixer.Sound("../Audio/ghost_return_to_cage.mp3")
                 self.ghost_return_to_cage_channel = pygame.mixer.Channel(3)
             except Exception as e:
-                print(f"Audio Warning (ghost return to cage): {e}")
+                #print(f"Audio Warning (ghost return to cage): {e}")
+                pass
 
             try:
                 self.eat_ghost_sound = pygame.mixer.Sound("../Audio/pacman_eatghost.wav")
                 self.eat_ghost_channel = pygame.mixer.Channel(4)
             except Exception as e:
-                print(f"Audio Warning (eat ghost): {e}")
+                #print(f"Audio Warning (eat ghost): {e}")
+                pass
 
     def unpause(self):
         self.paused = False

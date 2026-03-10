@@ -52,7 +52,7 @@ class PacMan:
 
                 if frames:
                     self.pacman_images[direction] = frames
-                    print(f"Loaded {len(frames)} frames for Pac-Man {direction} animation")
+                    #print(f"Loaded {len(frames)} frames for Pac-Man {direction} animation")
             except Exception as e:
                 print(f"Note: Could not load Pac-Man {direction} GIF: {e}")
 

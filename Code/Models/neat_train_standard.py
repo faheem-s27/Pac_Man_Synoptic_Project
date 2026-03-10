@@ -138,7 +138,7 @@ def eval_genome(genome, config):
     Evaluates a genome across 3 random mazes at full difficulty.
     Uses FIXED_SETTINGS — no curriculum adjustments.
     """
-    net = neat.nn.RecurrentNetwork.create(genome, config)
+    net = neat.nn.FeedForwardNetwork.create(genome, config)
     fitness_scores = []
     eval_seeds = [np.random.randint(0, 10000) for _ in range(3)]
 
