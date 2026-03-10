@@ -8,8 +8,7 @@ _CODE_DIR = os.path.join(_HERE, "..")   # Models/ is inside Code/
 _settings = Settings(os.path.join(_CODE_DIR, "game_settings.json")).get_all()
 MAZE_SEED = _settings.get("maze_seed", None)
 
-ACTION_NAMES = {0: "NOOP", 1: "UP", 2: "DOWN", 3: "LEFT", 4: "RIGHT"}
-
+ACTION_NAMES = {0: "UP", 1: "DOWN", 2: "LEFT", 3: "RIGHT"}
 
 env = PacManEnv(render_mode="human", maze_algorithm="recursive_backtracking", maze_seed=MAZE_SEED)
 obs, info = env.reset()

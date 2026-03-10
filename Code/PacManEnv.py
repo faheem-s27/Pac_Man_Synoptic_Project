@@ -253,15 +253,16 @@ class PacManEnv(gym.Env):
         pac_cx = int(eng.pacman.x + (ts / 2))
         pac_cy = int(eng.pacman.y + (ts / 2))
         pac_center = (pac_cx, pac_cy)
+        pac_pos = (eng.pacman.x, eng.pacman.y)
 
+        # 1. Pellet Radar (Green)
         # 1. Pellet Radar (Green)
         if eng.pellets or eng.power_pellets:
             all_p = eng.pellets + eng.power_pellets
-            # ACTION: p is already in pixels. Just shift to center-mass.
-            px_coords = [(int(p[0] + (ts / 2)), int(p[1] + (ts / 2))) for p in all_p]
-            dists = [(px[0] - pac_cx) ** 2 + (px[1] - pac_cy) ** 2 for px in px_coords]
-            target_px = px_coords[np.argmin(dists)]
-            pygame.draw.line(self._screen, (0, 255, 0), pac_center, target_px, 2)
+            dists = [(p[0] - pac_pos[0]) ** 2 + (p[1] - pac_pos[1]) ** 2 for p in all_p]
+            target_p = all_p[np.argmin(dists)]
+            # Draw GREEN line for pellets
+            pygame.draw.line(self._screen, (0, 255, 0), pac_pos, (target_p[0], target_p[1]), 2)
 
         # 2. Ghost Tracking
         for g in eng.ghosts:
@@ -344,29 +345,23 @@ class PacManEnv(gym.Env):
         p_rel = [0.0, 0.0]
         if eng.pellets or eng.power_pellets:
             all_p = eng.pellets + eng.power_pellets
-            # ACTION: p is already in pixels. Just shift to center-mass.
-            px_coords = [(p[0] + (ts / 2.0), p[1] + (ts / 2.0)) for p in all_p]
-            dists = [(px[0] - pac_cx) ** 2 + (px[1] - pac_cy) ** 2 for px in px_coords]
-
-            target_px = px_coords[int(np.argmin(dists))]
-            p_rel = [(target_px[0] - pac_cx) / mw_px, (target_px[1] - pac_cy) / mh_px]
+            dists = [(p[0] - eng.pacman.x) ** 2 + (p[1] - eng.pacman.y) ** 2 for p in all_p]
+            cp = all_p[np.argmin(dists)]
+            p_rel = [(cp[0] - eng.pacman.x) / mw_px, (cp[1] - eng.pacman.y) / mh_px]
         obs.extend(p_rel)
 
-        # [30-33] Walls (Center Mass Boundary Checking)
-        tx, ty = int(pac_cx / ts), int(pac_cy / ts)
+        # [30-33] Walls
+        tx, ty = int(eng.pacman.x / ts), int(eng.pacman.y / ts)
         for dx, dy in [(0, -1), (0, 1), (-1, 0), (1, 0)]:
             nx, ny = tx + dx, ty + dy
-            is_wall = 1.0 if not (0 <= nx < eng.maze.width and 0 <= ny < eng.maze.height) or eng.maze.maze[ny][nx] == 1 else 0.0
+            is_wall = 1.0 if not (0 <= nx < eng.maze.width and 0 <= ny < eng.maze.height) or eng.maze.maze[ny][
+                nx] == 1 else 0.0
             obs.append(is_wall)
 
         # [34-39] Global
         total_p = max(eng.pellets_eaten_this_level + len(eng.pellets), 1)
-        pp_dist = 1.5
-        if eng.power_pellets:
-            pp_coords = [(p[0] + (ts / 2.0), p[1] + (ts / 2.0)) for p in eng.power_pellets]
-            pp_dists = [(px[0] - pac_cx) ** 2 + (px[1] - pac_cy) ** 2 for px in pp_coords]
-            pp_dist = np.sqrt(min(pp_dists)) / mw_px
-
+        pp_dist = np.sqrt(min([(p[0] - eng.pacman.x) ** 2 + (p[1] - eng.pacman.y) ** 2 for p in
+                               eng.power_pellets])) / mw_px if eng.power_pellets else 1.5
         obs.extend([eng.pellets_eaten_this_level / total_p, 1.0 if eng.frightened_mode else 0.0,
                     eng.frightened_timer / max(eng.frightened_duration, 1), eng.lives / 3.0,
                     1.0 if eng.global_scatter_mode else 0.0, pp_dist])
