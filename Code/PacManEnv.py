@@ -59,8 +59,12 @@ from Code.Ghost import GhostState
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
-def _load_settings(json_path: str | None = None) -> dict:
-    """Load game_settings.json relative to the Code folder."""
+def _load_settings(json_path: str | dict | None = None) -> dict:
+    """Load game_settings.json relative to the Code folder, or return the dict provided."""
+    # If a dictionary is passed directly (e.g. from CurriculumManager), use it.
+    if isinstance(json_path, dict):
+        return json_path
+
     if json_path is None:
         json_path = os.path.join(_HERE, "game_settings.json")
     s = Settings(json_path)
@@ -105,9 +109,11 @@ class PacManEnv(gym.Env):
             self,
             render_mode: str | None = None,
             obs_type: str = "vector",
-            settings_path: str | None = None,
+            settings: dict | None = None,
+            settings_path: str | None = None, # Legacy: kept for compatibility
             max_episode_steps: int = 27_000,
             maze_seed: int | None = None,
+            maze_algorithm: str = "recursive_backtracking",
             **engine_kwargs,
     ):
         super().__init__()
@@ -117,7 +123,8 @@ class PacManEnv(gym.Env):
         self.maze_seed = maze_seed
         self._step_count = 0
 
-        self._base_cfg = _load_settings(settings_path)
+        # Load settings: try 'settings' dict first, then 'settings_path', then default file
+        self._base_cfg = _load_settings(settings if settings else settings_path)
         self._base_cfg.update(engine_kwargs)
 
         self._pygame_initialised = False
@@ -144,12 +151,21 @@ class PacManEnv(gym.Env):
 
     def reset(self, *, seed=None, options=None):
         super().reset(seed=seed)
-        self._ensure_pygame()
-        cfg = dict(self._base_cfg)
-        cfg["maze_seed"] = self.maze_seed
 
-        # Optimization: Pass render_mode to engine to skip asset loading
+        # Ensure pygame initialized if needed
+        self._ensure_pygame()
+
+        # Merge base config
+        cfg = self._base_cfg.copy()
+
+        # Apply runtime seed override if provided
+        if seed is not None:
+            cfg["maze_seed"] = seed
+
+        # Initialize Engine with merged config
+        # GameEngine receives active_ghost_count via **kwargs if present in cfg
         self._engine = GameEngine(**cfg)
+
         self._engine.game_state = GameState.GAME
         self._engine.paused = False
 
@@ -159,7 +175,8 @@ class PacManEnv(gym.Env):
         self._step_count = 0
         self._levels_completed = 0
 
-        return self._get_obs(), self._get_info()
+        # Return first observation
+        return self._get_obs(), {}
 
     def step(self, action: int):
         direction = self._ACTION_MAP[int(action)]
@@ -249,20 +266,21 @@ class PacManEnv(gym.Env):
         eng = self._engine
         ts = eng.tile_size
 
-        # Center Mass Anchor
+        # ACTION: Strict Center Mass Anchor (Top-left origin is banned)
         pac_cx = int(eng.pacman.x + (ts / 2))
         pac_cy = int(eng.pacman.y + (ts / 2))
         pac_center = (pac_cx, pac_cy)
-        pac_pos = (eng.pacman.x, eng.pacman.y)
 
-        # 1. Pellet Radar (Green)
         # 1. Pellet Radar (Green)
         if eng.pellets or eng.power_pellets:
             all_p = eng.pellets + eng.power_pellets
-            dists = [(p[0] - pac_pos[0]) ** 2 + (p[1] - pac_pos[1]) ** 2 for p in all_p]
-            target_p = all_p[np.argmin(dists)]
-            # Draw GREEN line for pellets
-            pygame.draw.line(self._screen, (0, 255, 0), pac_pos, (target_p[0], target_p[1]), 2)
+            # PELLETS are already PRE-CALCULATED as center-mass pixel coordinates in GameEngine
+            px_coords = all_p
+            dists = [(px[0] - pac_cx) ** 2 + (px[1] - pac_cy) ** 2 for px in px_coords]
+
+            target_px = px_coords[np.argmin(dists)]
+            # Draw GREEN line using purely centered, scaled pixels
+            pygame.draw.line(self._screen, (0, 255, 0), pac_center, target_px, 2)
 
         # 2. Ghost Tracking
         for g in eng.ghosts:
@@ -341,27 +359,35 @@ class PacManEnv(gym.Env):
             else:
                 obs.extend([0.0, 0.0, 1.5, 0.0, 0.0, 0.0])
 
-        # [28-29] Pellet Radar (Center Mass Distance)
+        # [28-29] Pellet Radar (Center Mass Distance & Grid-to-Pixel Conversion)
         p_rel = [0.0, 0.0]
         if eng.pellets or eng.power_pellets:
             all_p = eng.pellets + eng.power_pellets
-            dists = [(p[0] - eng.pacman.x) ** 2 + (p[1] - eng.pacman.y) ** 2 for p in all_p]
-            cp = all_p[np.argmin(dists)]
-            p_rel = [(cp[0] - eng.pacman.x) / mw_px, (cp[1] - eng.pacman.y) / mh_px]
+            # PELLETS are already PRE-CALCULATED as center-mass pixel coordinates in GameEngine
+            px_coords = all_p
+            dists = [(px[0] - pac_cx) ** 2 + (px[1] - pac_cy) ** 2 for px in px_coords]
+
+            target_px = px_coords[int(np.argmin(dists))]
+            p_rel = [(target_px[0] - pac_cx) / mw_px, (target_px[1] - pac_cy) / mh_px]
         obs.extend(p_rel)
 
-        # [30-33] Walls
-        tx, ty = int(eng.pacman.x / ts), int(eng.pacman.y / ts)
+        # [30-33] Walls (Center Mass Boundary Checking)
+        tx, ty = int(pac_cx / ts), int(pac_cy / ts)
         for dx, dy in [(0, -1), (0, 1), (-1, 0), (1, 0)]:
             nx, ny = tx + dx, ty + dy
             is_wall = 1.0 if not (0 <= nx < eng.maze.width and 0 <= ny < eng.maze.height) or eng.maze.maze[ny][
                 nx] == 1 else 0.0
             obs.append(is_wall)
 
-        # [34-39] Global
+        # [34-39] Global (Power Pellet Center Mass & Grid-to-Pixel Conversion)
         total_p = max(eng.pellets_eaten_this_level + len(eng.pellets), 1)
-        pp_dist = np.sqrt(min([(p[0] - eng.pacman.x) ** 2 + (p[1] - eng.pacman.y) ** 2 for p in
-                               eng.power_pellets])) / mw_px if eng.power_pellets else 1.5
+        pp_dist = 1.5
+        if eng.power_pellets:
+            # PELLETS are already PRE-CALCULATED as center-mass pixel coordinates in GameEngine
+            pp_coords = eng.power_pellets
+            pp_dists = [(px[0] - pac_cx) ** 2 + (px[1] - pac_cy) ** 2 for px in pp_coords]
+            pp_dist = np.sqrt(min(pp_dists)) / mw_px
+
         obs.extend([eng.pellets_eaten_this_level / total_p, 1.0 if eng.frightened_mode else 0.0,
                     eng.frightened_timer / max(eng.frightened_duration, 1), eng.lives / 3.0,
                     1.0 if eng.global_scatter_mode else 0.0, pp_dist])

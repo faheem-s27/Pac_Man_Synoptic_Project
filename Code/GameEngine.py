@@ -33,6 +33,7 @@ class GameEngine:
                  maze_seed=None,
                  enable_sound=True,
                  enable_power_pellets=True,
+                 active_ghost_count=4,  # <-- NEW: Defaults to full difficulty
                  **kwargs):
         # Parse resolution string if provided
         if isinstance(window_resolution, str):
@@ -44,6 +45,7 @@ class GameEngine:
         self.screen_height = screen_height
         self.tile_size = tile_size
         self.enable_ghosts = enable_ghosts
+        self.active_ghost_count = active_ghost_count  # Store it for later use
         self.god_mode = god_mode
         self.enable_power_pellets = enable_power_pellets
         self.max_pellets = max_pellets  # legacy, unused — kept for **kwargs safety
@@ -314,36 +316,40 @@ class GameEngine:
         cage_home_py = interior_py
 
         # Blinky (Red) — spawns immediately, starts above cage
-        blinky = Ghost(blinky_px, blinky_py, ts, speed=self.ghost_speed, maze=self.maze, name="Blinky")
-        blinky.color     = (255, 0, 0)
-        blinky.spawn_delay = 0
-        blinky.cage_x    = cage_home_px
-        blinky.cage_y    = cage_home_py
-        self.ghosts.append(blinky)
+        if self.active_ghost_count > 0:
+            blinky = Ghost(blinky_px, blinky_py, ts, speed=self.ghost_speed, maze=self.maze, name="Blinky")
+            blinky.color     = (255, 0, 0)
+            blinky.spawn_delay = 0
+            blinky.cage_x    = cage_home_px
+            blinky.cage_y    = cage_home_py
+            self.ghosts.append(blinky)
 
         # Pinky (Pink) — centre of cage interior
-        pinky = Pinky(pinky_px, interior_py, ts, speed=self.ghost_speed, maze=self.maze, name="Pinky")
-        pinky.color      = (255, 184, 255)
-        pinky.spawn_delay = 5 * 60
-        pinky.cage_x     = pinky_px
-        pinky.cage_y     = interior_py
-        self.ghosts.append(pinky)
+        if self.active_ghost_count > 1:
+            pinky = Pinky(pinky_px, interior_py, ts, speed=self.ghost_speed, maze=self.maze, name="Pinky")
+            pinky.color      = (255, 184, 255)
+            pinky.spawn_delay = 5 * 60
+            pinky.cage_x     = pinky_px
+            pinky.cage_y     = interior_py
+            self.ghosts.append(pinky)
 
         # Inky (Cyan) — left of centre
-        inky = Inky(inky_px, interior_py, ts, speed=self.ghost_speed, maze=self.maze, name="Inky", blinky=blinky)
-        inky.color       = (0, 255, 255)
-        inky.spawn_delay = 10 * 60
-        inky.cage_x      = inky_px
-        inky.cage_y      = interior_py
-        self.ghosts.append(inky)
+        if self.active_ghost_count > 2:
+            inky = Inky(inky_px, interior_py, ts, speed=self.ghost_speed, maze=self.maze, name="Inky", blinky=blinky)
+            inky.color       = (0, 255, 255)
+            inky.spawn_delay = 10 * 60
+            inky.cage_x      = inky_px
+            inky.cage_y      = interior_py
+            self.ghosts.append(inky)
 
         # Clyde (Orange) — right of centre
-        clyde = Clyde(clyde_px, interior_py, ts, speed=self.ghost_speed, maze=self.maze, name="Clyde")
-        clyde.color      = (255, 184, 82)
-        clyde.spawn_delay = 15 * 60
-        clyde.cage_x     = clyde_px
-        clyde.cage_y     = interior_py
-        self.ghosts.append(clyde)
+        if self.active_ghost_count > 3:
+            clyde = Clyde(clyde_px, interior_py, ts, speed=self.ghost_speed, maze=self.maze, name="Clyde")
+            clyde.color      = (255, 184, 82)
+            clyde.spawn_delay = 15 * 60
+            clyde.cage_x     = clyde_px
+            clyde.cage_y     = interior_py
+            self.ghosts.append(clyde)
 
     def _initialize_pellets(self):
         pellets = []

@@ -1,15 +1,16 @@
 """
-neat_train.py
-=============
-Trains a NEAT agent to play Pac-Man using the PacManEnv Gymnasium wrapper.
+neat_train_standard.py
+======================
+Trains a NEAT agent to play Pac-Man at FULL difficulty from generation 0.
+No curriculum learning — uses game_settings.json as-is for every evaluation.
 
 Usage
 -----
     # Train from scratch
-    python -m Code.neat_train
+    python -m Code.Models.neat_train_standard
 
     # Resume from a NEAT checkpoint
-    python -m Code.neat_train --checkpoint checkpoints/neat-checkpoint-9
+    python -m Code.Models.neat_train_standard --checkpoint checkpoints/neat-checkpoint-9
 """
 
 import os
@@ -30,14 +31,18 @@ if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
 from Code.PacManEnv import PacManEnv
+from Code.Settings import Settings
+
+# ── Load settings once — full difficulty, no overrides ───────────────────────
+_SETTINGS_PATH = os.path.join(_ROOT, "Code", "game_settings.json")
+FIXED_SETTINGS = Settings(_SETTINGS_PATH).get_all()
 
 # ── Config ───────────────────────────────────────────────────────────────────
-# We define a static evaluation suite to ensure fair comparison across generations
-MAX_STEPS        = 10_000          # Increased to allow for multi-level survival
-NUM_GENERATIONS  = 200
-CHECKPOINT_DIR   = os.path.join(_HERE, "checkpoints")
-CONFIG_PATH      = os.path.join(_HERE, "neat_config.cfg") # Matched your previous filename
-PARALLEL         = True
+MAX_STEPS       = 3_500
+NUM_GENERATIONS = 200
+CHECKPOINT_DIR  = os.path.join(_HERE, "checkpoints_standard")
+CONFIG_PATH     = os.path.join(_HERE, "neat_config.cfg")
+PARALLEL        = True
 
 NODE_NAMES = {
     # ── Pac-Man State ──
@@ -61,93 +66,80 @@ NODE_NAMES = {
     -38: "Lives", -39: "Scatter", -40: "PP_Dist",
 
     # ── Outputs ──
-    0: "NOOP", 1: "UP", 2: "DOWN", 3: "LEFT", 4: "RIGHT"
+    0: "UP", 1: "DOWN", 2: "LEFT", 3: "RIGHT"
 }
 
-def plot_learning_curve(statistics, filename="checkpoints/learning_curve.png"):
-    """
-    Setup: Extracts fitness data from the NEAT reporter.
-    Action: Plots the Best vs Average fitness over all generations.
-    Result: Saves a PNG graph to the checkpoints folder.
-    """
-    generation = range(len(statistics.most_fit_genomes))
+
+# ── Visualisation helpers ─────────────────────────────────────────────────────
+
+def plot_learning_curve(statistics, filename=None):
+    if filename is None:
+        filename = os.path.join(CHECKPOINT_DIR, "learning_curve.png")
+    generation   = range(len(statistics.most_fit_genomes))
     best_fitness = [c.fitness for c in statistics.most_fit_genomes]
-    avg_fitness = statistics.get_fitness_mean()
+    avg_fitness  = statistics.get_fitness_mean()
 
     plt.figure(figsize=(10, 6))
     plt.plot(generation, best_fitness, 'b-', label="Best Fitness")
-    plt.plot(generation, avg_fitness, 'r-', label="Average Fitness")
-
-    plt.title("NEAT Population Fitness over Generations")
+    plt.plot(generation, avg_fitness,  'r-', label="Average Fitness")
+    plt.title("NEAT Population Fitness over Generations (Standard)")
     plt.xlabel("Generation")
-    plt.ylabel("Fitness (Score - Penalties)")
+    plt.ylabel("Fitness")
     plt.grid(True)
     plt.legend(loc="best")
-
     plt.savefig(filename)
     plt.close()
     print(f"  [!] Learning curve saved to {filename}")
 
 
 def draw_neural_net(config, genome, filename):
-    """
-    Setup: Takes the raw genome configuration.
-    Action: Uses Graphviz to render the active topological connections using the cg.key tuple.
-    Result: Saves an SVG/PNG visual of the network, skipping disconnected inputs.
-    """
-    dot = graphviz.Digraph(format='png', node_attr={'shape': 'circle', 'fontsize': '10', 'fontname': 'Helvetica'})
-    dot.attr(rankdir='LR')  # Left to Right layout
+    dot = graphviz.Digraph(
+        format='png',
+        node_attr={'shape': 'circle', 'fontsize': '10', 'fontname': 'Helvetica'}
+    )
+    dot.attr(rankdir='LR')
 
-    # Find all nodes that actually have active connections
     used_nodes = set()
     for cg in genome.connections.values():
         if cg.enabled:
-            in_node, out_node = cg.key  # <-- THE FIX: Unpack the key tuple
+            in_node, out_node = cg.key
             used_nodes.add(in_node)
             used_nodes.add(out_node)
 
-    # Draw ONLY the used Inputs (Blue) to prevent massive visual clutter
     for i in range(config.genome_config.num_inputs):
         node_id = -(i + 1)
         if node_id in used_nodes:
             label = NODE_NAMES.get(node_id, str(node_id))
             dot.node(str(node_id), label, style='filled', fillcolor='lightblue')
 
-    # Draw Outputs (Red)
     for i in range(config.genome_config.num_outputs):
         label = NODE_NAMES.get(i, str(i))
         dot.node(str(i), label, style='filled', fillcolor='salmon')
 
-    # Draw Hidden Nodes (Gray)
     for n in genome.nodes:
         if n not in NODE_NAMES and n in used_nodes:
             dot.node(str(n), f"Hidden_{n}", style='filled', fillcolor='lightgray')
 
-    # Draw Connections
     for cg in genome.connections.values():
         if cg.enabled:
-            in_node, out_node = cg.key  # <-- THE FIX: Unpack the key tuple
-            # Green for excitatory (positive), Red for inhibitory (negative)
-            color = 'green' if cg.weight > 0 else 'red'
-            # Thickness based on weight magnitude
+            in_node, out_node = cg.key
+            color     = 'green' if cg.weight > 0 else 'red'
             thickness = str(max(0.5, abs(cg.weight) * 0.8))
             dot.edge(str(in_node), str(out_node), color=color, penwidth=thickness)
 
     dot.render(filename, view=False, cleanup=True)
     print(f"  [!] Topology rendered to {filename}.png")
 
+
 # ── Genome evaluation ─────────────────────────────────────────────────────────
 
 def eval_genome(genome, config):
     """
-    Evaluates a genome across multiple procedurally generated mazes.
-    Returns the mean fitness to enforce generalisation over memorisation.
+    Evaluates a genome across 3 random mazes at full difficulty.
+    Uses FIXED_SETTINGS — no curriculum adjustments.
     """
-    net = neat.nn.FeedForwardNetwork.create(genome, config)
-
-    # Track performance across the battery of tests
+    net = neat.nn.RecurrentNetwork.create(genome, config)
     fitness_scores = []
-
     eval_seeds = [np.random.randint(0, 10000) for _ in range(3)]
 
     for seed in eval_seeds:
@@ -156,7 +148,8 @@ def eval_genome(genome, config):
             obs_type="vector",
             maze_seed=seed,
             maze_algorithm="recursive_backtracking",
-            max_episode_steps=MAX_STEPS
+            max_episode_steps=MAX_STEPS,
+            settings=FIXED_SETTINGS  # Full difficulty, always
         )
 
         obs, _ = env.reset()
@@ -164,22 +157,17 @@ def eval_genome(genome, config):
 
         try:
             while True:
-                # Pass the 40-element vector to the neural network
                 outputs = net.activate(obs.tolist())
-                action = int(np.argmax(outputs))
-
+                action  = int(np.argmax(outputs))
                 obs, reward, terminated, truncated, _ = env.step(action)
                 total_reward += reward
-
                 if terminated or truncated:
                     break
         finally:
-            # Crucial: Prevent memory leaks from PyGame headless surfaces
             env.close()
 
         fitness_scores.append(total_reward)
 
-    # The genome's final fitness is its average performance across all tested maps
     return float(np.mean(fitness_scores))
 
 
@@ -191,7 +179,7 @@ class BestGenomeSaver(neat.reporting.BaseReporter):
     def __init__(self, save_dir: str):
         self.save_dir = save_dir
         os.makedirs(save_dir, exist_ok=True)
-        self.generation = 0
+        self.generation  = 0
         self.best_fitness = float("-inf")
 
     def start_generation(self, generation):
@@ -205,7 +193,6 @@ class BestGenomeSaver(neat.reporting.BaseReporter):
                 pickle.dump(best_genome, f)
             print(f"  [!] New best genome saved! Fitness: {self.best_fitness:.1f} → {path}")
 
-            # Action: Draw the network of the new champion
             net_path = os.path.join(self.save_dir, f"topology_gen_{self.generation}")
             draw_neural_net(config, best_genome, net_path)
 
@@ -216,9 +203,8 @@ def run(checkpoint: str | None = None):
     os.makedirs(CHECKPOINT_DIR, exist_ok=True)
 
     if not os.path.exists(CONFIG_PATH):
-        raise FileNotFoundError(f"NEAT config file not found at {CONFIG_PATH}")
+        raise FileNotFoundError(f"NEAT config not found at {CONFIG_PATH}")
 
-    # Load NEAT config
     config = neat.Config(
         neat.DefaultGenome,
         neat.DefaultReproduction,
@@ -227,16 +213,15 @@ def run(checkpoint: str | None = None):
         CONFIG_PATH,
     )
 
-    # Create or restore population
     if checkpoint and os.path.exists(checkpoint):
         print(f"Resuming from checkpoint: {checkpoint}")
         population = neat.Checkpointer.restore_checkpoint(checkpoint)
     else:
         population = neat.Population(config)
 
-    # Reporters
     population.add_reporter(neat.StdOutReporter(True))
-    population.add_reporter(neat.StatisticsReporter())
+    stats = neat.StatisticsReporter()
+    population.add_reporter(stats)
     population.add_reporter(
         neat.Checkpointer(
             generation_interval=10,
@@ -245,12 +230,13 @@ def run(checkpoint: str | None = None):
     )
     population.add_reporter(BestGenomeSaver(CHECKPOINT_DIR))
 
-    # Evaluate genomes
+    print(f"\n[Standard Training] Full difficulty from generation 0. "
+          f"Running for {NUM_GENERATIONS} generations...\n")
+
     if PARALLEL:
-        # Use available CPU cores to evaluate the population concurrently
         cores = multiprocessing.cpu_count()
         print(f"Initiating Parallel Evaluator on {cores} cores...")
-        pe = neat.ParallelEvaluator(cores, eval_genome)
+        pe     = neat.ParallelEvaluator(cores, eval_genome)
         winner = population.run(pe.evaluate, NUM_GENERATIONS)
     else:
         winner = population.run(
@@ -260,21 +246,21 @@ def run(checkpoint: str | None = None):
             NUM_GENERATIONS,
         )
 
-    # Save final winner
     winner_path = os.path.join(CHECKPOINT_DIR, "winner_genome.pkl")
     with open(winner_path, "wb") as f:
         pickle.dump(winner, f)
     print(f"\nEvolution Complete. Winner saved → {winner_path}")
     print(f"Maximum Fitness Achieved: {winner.fitness:.1f}")
 
-    plot_learning_curve(population.reporters.reporters[1])
+    plot_learning_curve(stats)
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Train a NEAT agent on Pac-Man")
+    parser = argparse.ArgumentParser(description="Train a NEAT agent on Pac-Man (no curriculum)")
     parser.add_argument(
         "--checkpoint", type=str, default=None,
         help="Path to a neat-checkpoint file to resume from",
     )
     args = parser.parse_args()
     run(checkpoint=args.checkpoint)
+

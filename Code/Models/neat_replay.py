@@ -29,15 +29,17 @@ if _ROOT not in sys.path:
 
 from Code.PacManEnv import PacManEnv
 from Code.Settings  import Settings
+from Code.CurriculumManager import CurriculumManager
 
 # ── Config ───────────────────────────────────────────────────────────────────
-_SETTINGS      = Settings(os.path.join(_HERE, "game_settings.json")).get_all()
+# _HERE is Code/Models/ — game_settings.json lives one level up in Code/
+_SETTINGS      = Settings(os.path.join(_ROOT, "Code", "game_settings.json")).get_all()
 MAZE_ALGORITHM = "recursive_backtracking"
 CONFIG_PATH    = os.path.join(_HERE, "neat_config.cfg")
 ACTION_NAMES   = {0: "UP", 1: "DOWN", 2: "LEFT", 3: "RIGHT"}
 
 
-def replay(genome_path: str, test_generalisation: bool):
+def replay(genome_path: str, test_generalisation: bool, generation: int):
     if not os.path.exists(genome_path):
         print(f"[ERROR] Genome file not found: {genome_path}")
         sys.exit(1)
@@ -59,12 +61,17 @@ def replay(genome_path: str, test_generalisation: bool):
         neat.DefaultStagnation,
         CONFIG_PATH,
     )
-    net = neat.nn.FeedForwardNetwork.create(genome, config)
+    net = neat.nn.RecurrentNetwork.create(genome, config)
 
     # Determine seed for generalisation testing
     eval_seed = random.randint(0, 999999) if test_generalisation else _SETTINGS.get("maze_seed", None)
     if test_generalisation:
         print(f"  [!] Zero-Shot Generalisation Test Activated. Procedural Seed: {eval_seed}")
+
+    # Load Curriculum Settings
+    cm = CurriculumManager()
+    print(f"  [!] Applying Curriculum Settings for Generation {generation}")
+    curriculum_settings = cm.get_settings_for_generation(generation)
 
     # Run with rendering
     env = PacManEnv(
@@ -72,6 +79,7 @@ def replay(genome_path: str, test_generalisation: bool):
         obs_type="vector",
         maze_seed=eval_seed,
         maze_algorithm=MAZE_ALGORITHM,
+        settings=curriculum_settings
     )
 
     obs, _ = env.reset()
@@ -118,9 +126,15 @@ if __name__ == "__main__":
         help="Path to the pickled genome file",
     )
     parser.add_argument(
+        "--generation",
+        type=int,
+        default=9,
+        help="Simulate the curriculum difficulty of this generation (default: 100 - full difficulty)",
+    )
+    parser.add_argument(
         "--random",
         action="store_true",
         help="Test zero-shot generalisation by generating a completely random, unseen map.",
     )
     args = parser.parse_args()
-    replay(args.genome, args.random)
+    replay(args.genome, args.random, args.generation)

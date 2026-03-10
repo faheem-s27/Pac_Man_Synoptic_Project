@@ -5,9 +5,8 @@ Trains NEAT with every genome running as its own independent GameEngine,
 all rendered scaled-down into a single tiled window so you can watch the
 entire population at once.
 
-Layout  (default pop=50):
-  7 columns × 8 rows  = 56 cells  (last 6 stay blank)
-  Each cell is CELL_W × CELL_H pixels.
+Layout  (default pop=150):
+  Dynamically scales columns/rows to fit MAX_WINDOW.
   The full map is rendered into an off-screen surface then scaled to fit.
 
 Controls
@@ -25,6 +24,7 @@ import sys
 import pickle
 import argparse
 import math
+import numpy as np
 
 import neat
 import pygame
@@ -37,13 +37,14 @@ if _ROOT not in sys.path:
 from Code.GameEngine import GameEngine, GameState
 from Code.Ghost      import GhostState
 from Code.Settings   import Settings
+from Code.CurriculumManager import CurriculumManager
 
 # ─── Tunables ────────────────────────────────────────────────────────────────
 MAZE_ALGORITHM  = "recursive_backtracking"
 CONFIG_PATH     = os.path.join(_HERE, "neat_config.cfg")
 CHECKPOINT_DIR  = os.path.join(_HERE, "checkpoints")
 NUM_GENERATIONS = 200
-MAX_STEPS       = 3_000
+MAX_STEPS       = 3_500  # Aggressively restricted to punish infinite loops
 
 MAX_WINDOW_W = 1400
 MAX_WINDOW_H = 900
@@ -51,13 +52,13 @@ INFO_BAR_H   = 44
 TARGET_FPS   = 60
 # ─────────────────────────────────────────────────────────────────────────────
 
-ACTION_NAMES = ["NOOP", "UP", "DOWN", "LEFT", "RIGHT"]
-DIR_MAP      = {0:(0,0), 1:(0,-1), 2:(0,1), 3:(-1,0), 4:(1,0)}
+# ACTION: 4-Action Space strictly enforced (NOOP amputated)
+ACTION_NAMES = ["UP", "DOWN", "LEFT", "RIGHT"]
+DIR_MAP      = {0: (0, -1), 1: (0, 1), 2: (-1, 0), 3: (1, 0)}
 
 
 def compute_grid_layout(n: int, game_w: int, game_h: int):
-    """Best (cols, rows, cell_w, cell_h) so n cells fit in MAX_WINDOW,
-    each cell showing the full game surface scaled down uniformly."""
+    """Best (cols, rows, cell_w, cell_h) so n cells fit in MAX_WINDOW."""
     best = None
     best_area = 0
     for cols in range(1, n + 1):
@@ -79,18 +80,11 @@ def compute_grid_layout(n: int, game_w: int, game_h: int):
     return best
 
 
-def _load_base_cfg() -> dict:
-    s = Settings(os.path.join(_HERE, "game_settings.json"))
-    return s.get_all()
-
-
-def _make_engine(base_cfg: dict) -> GameEngine:
-    cfg = dict(base_cfg)
+def _make_engine(settings: dict) -> GameEngine:
+    cfg = dict(settings)
     cfg["maze_algorithm"]   = MAZE_ALGORITHM
-    cfg["use_classic_maze"] = base_cfg.get("use_classic_maze", False)
     cfg["enable_sound"]     = False   # never play audio during training
-    # maze_seed comes from settings JSON (key "maze_seed"); None = random each run
-    cfg.setdefault("maze_seed", None)
+    cfg.setdefault("maze_seed", None) # random procedural generation
     engine = GameEngine(**cfg)
     engine.game_state = GameState.GAME
     engine.paused     = False
@@ -102,43 +96,48 @@ def _make_engine(base_cfg: dict) -> GameEngine:
 class GenomeRunner:
     """One complete independent game + NEAT network for a single genome."""
 
-    # Off-screen surface shared size = real game resolution
     _game_w: int = 0
     _game_h: int = 0
 
-    def __init__(self, genome, config, base_cfg: dict):
+    def __init__(self, genome, config, env_settings: dict):
         self.genome       = genome
         self.net          = neat.nn.FeedForwardNetwork.create(genome, config)
-        self.engine       = _make_engine(base_cfg)
+        self.engine       = _make_engine(env_settings)
         self.done         = False
         self.total_reward = 0.0
         self.steps        = 0
         self.prev_score   = 0
         self.prev_lives   = self.engine.lives
 
-        # Off-screen surface at full game resolution
         GenomeRunner._game_w = self.engine.screen_width
         GenomeRunner._game_h = self.engine.screen_height
         self._surf = pygame.Surface((GenomeRunner._game_w, GenomeRunner._game_h))
 
-    # ── build observation vector (mirrors PacManEnv._get_vector_obs) ─────────
+    # ── build observation vector (mirrors PacManEnv._get_vector_obs exactly) ──
     def _obs(self) -> list[float]:
         eng = self.engine
         ts  = eng.tile_size
         mw  = eng.maze.width  * ts
         mh  = eng.maze.height * ts
-        pac = eng.pacman
+
+        # ACTION: Strict Center Mass Anchor (Top-left origin is banned)
+        pac_cx = eng.pacman.x + (ts / 2.0)
+        pac_cy = eng.pacman.y + (ts / 2.0)
 
         # [0-3] Pac-Man
-        obs = [pac.x / mw, pac.y / mh, float(pac.direction[0]), float(pac.direction[1])]
+        obs = [pac_cx / mw, pac_cy / mh, float(eng.pacman.direction[0]), float(eng.pacman.direction[1])]
 
-        # [4-27] Ghosts — 6 values each: rel_x, rel_y, dist, dir_x, dir_y, threat
+        # [4-27] Ghosts
         for i in range(4):
             if i < len(eng.ghosts):
                 g  = eng.ghosts[i]
-                rx = (g.x - pac.x) / mw
-                ry = (g.y - pac.y) / mh
+                g_cx = g.x + (ts / 2.0)
+                g_cy = g.y + (ts / 2.0)
+
+                rx = (g_cx - pac_cx) / mw
+                ry = (g_cy - pac_cy) / mh
                 dist = (rx**2 + ry**2)**0.5
+
                 threat = (1.0 if g.state in (GhostState.CHASE, GhostState.SCATTER)
                           else -1.0 if g.state == GhostState.FRIGHTENED else 0.0)
                 obs.extend([rx, ry, dist, float(g.current_dir[0]), float(g.current_dir[1]), threat])
@@ -148,15 +147,16 @@ class GenomeRunner:
         # [28-29] Nearest pellet radar
         all_p = eng.pellets + eng.power_pellets
         if all_p:
-            dists = [(p[0]-pac.x)**2 + (p[1]-pac.y)**2 for p in all_p]
+            # PELLETS are already PRE-CALCULATED as center-mass pixel coordinates
+            dists = [(p[0]-pac_cx)**2 + (p[1]-pac_cy)**2 for p in all_p]
             cp    = all_p[dists.index(min(dists))]
-            obs.extend([(cp[0]-pac.x)/mw, (cp[1]-pac.y)/mh])
+            obs.extend([(cp[0]-pac_cx)/mw, (cp[1]-pac_cy)/mh])
         else:
             obs.extend([0.0, 0.0])
 
-        # [30-33] Wall sensors
-        cur_tx = int(pac.x / ts)
-        cur_ty = int(pac.y / ts)
+        # [30-33] Wall sensors (Center Mass Boundary Checking)
+        cur_tx = int(pac_cx / ts)
+        cur_ty = int(pac_cy / ts)
         for ddx, ddy in [(0,-1),(0,1),(-1,0),(1,0)]:
             tx, ty = cur_tx+ddx, cur_ty+ddy
             if 0 <= tx < eng.maze.width and 0 <= ty < eng.maze.height:
@@ -169,8 +169,11 @@ class GenomeRunner:
         pellet_ratio = eng.pellets_eaten_this_level / total_p
         frit_active  = 1.0 if eng.frightened_mode else 0.0
         frit_time    = eng.frightened_timer / max(eng.frightened_duration, 1)
-        pp_dist      = (min((p[0]-pac.x)**2 + (p[1]-pac.y)**2 for p in eng.power_pellets)**0.5 / mw
-                        if eng.power_pellets else 1.5)
+
+        pp_dist = 1.5
+        if eng.power_pellets:
+            pp_dist = min((p[0]-pac_cx)**2 + (p[1]-pac_cy)**2 for p in eng.power_pellets)**0.5 / mw
+
         obs.extend([pellet_ratio, frit_active, frit_time,
                     eng.lives / 3.0, 1.0 if eng.global_scatter_mode else 0.0, pp_dist])
 
@@ -183,32 +186,32 @@ class GenomeRunner:
 
         obs    = self._obs()
         output = self.net.activate(obs)
-        action = output.index(max(output))
+        action = int(np.argmax(output))  # ACTION: Robust argmax for 4-outputs
 
-        if action != 0:
-            self.engine.pacman.next_direction = DIR_MAP[action]
-
+        self.engine.pacman.next_direction = DIR_MAP[action]
         self.engine.update()
         self.steps += 1
 
-        # Reward = score delta − time penalty
+        # Reward = score delta / 2.0 − time penalty (mirrors PacManEnv)
+        reward = -0.05
         score_delta = self.engine.pacman.score - self.prev_score
-        reward      = float(score_delta) - 0.1
+        if score_delta > 0:
+            reward += float(score_delta) / 2.0
         self.prev_score = self.engine.pacman.score
 
         if self.engine.lives < self.prev_lives:
-            reward -= 500.0
+            reward -= 50.0
             self.prev_lives = self.engine.lives
 
         if self.engine.won:
-            reward += 500.0
+            reward += 100.0
             self.engine.next_level()
 
         self.total_reward += reward
 
         if self.engine.game_over or self.steps >= MAX_STEPS:
             if self.engine.game_over:
-                self.total_reward -= 500.0
+                self.total_reward -= 50.0
             self.genome.fitness = self.total_reward
             self.done = True
 
@@ -219,23 +222,18 @@ class GenomeRunner:
         self._surf.fill((0, 0, 0))
         self.engine.draw(self._surf)
 
-        # Dim finished cells
         if self.done:
-            dim = pygame.Surface((GenomeRunner._game_w, GenomeRunner._game_h),
-                                 pygame.SRCALPHA)
+            dim = pygame.Surface((GenomeRunner._game_w, GenomeRunner._game_h), pygame.SRCALPHA)
             dim.fill((0, 0, 0, 180))
             self._surf.blit(dim, (0, 0))
 
-        # Scale down to cell size
         scaled = pygame.transform.scale(self._surf, (cell_w, cell_h))
-
         dest_x = col * cell_w
         dest_y = row * cell_h
         window.blit(scaled, (dest_x, dest_y))
 
         if is_best:
-            pygame.draw.rect(window, (255, 215, 0),
-                             (dest_x, dest_y, cell_w, cell_h), 3)
+            pygame.draw.rect(window, (255, 215, 0), (dest_x, dest_y, cell_w, cell_h), 3)
 
         color = (255, 215, 0) if is_best else ((80, 80, 80) if self.done else (200, 200, 200))
         lbl   = label_font.render(f"{self.total_reward:+.0f}", True, color)
@@ -251,7 +249,7 @@ class BestGenomeSaver(neat.reporting.BaseReporter):
         os.makedirs(save_dir, exist_ok=True)
 
     def post_evaluate(self, config, population, species_set, best_genome):
-        if best_genome.fitness > self.best_fitness:
+        if best_genome is not None and best_genome.fitness is not None and best_genome.fitness > self.best_fitness:
             self.best_fitness = best_genome.fitness
             path = os.path.join(self.save_dir, "best_genome.pkl")
             with open(path, "wb") as f:
@@ -287,17 +285,17 @@ def run(checkpoint=None):
     population.add_reporter(BestGenomeSaver(CHECKPOINT_DIR))
 
     pygame.init()
-    base_cfg = _load_base_cfg()
+    curriculum = CurriculumManager(os.path.join(_ROOT, "game_settings.json"))
 
     label_font = pygame.font.Font(None, 18)
     info_font  = pygame.font.Font(None, 26)
     fps_clock  = pygame.time.Clock()
 
-    generation_counter = [0]
-    window             = [None]   # created lazily once we know pop size
+    generation_counter = [population.generation]
+    window             = [None]
 
     def _save_best_on_exit(genome_list):
-        scored = [g for g in genome_list if g.fitness is not None and g.fitness > -9999]
+        scored = [g for g in genome_list if getattr(g, 'fitness', None) is not None and g.fitness > -9999]
         if scored:
             best = max(scored, key=lambda g: g.fitness)
             path = os.path.join(CHECKPOINT_DIR, "best_genome.pkl")
@@ -306,32 +304,33 @@ def run(checkpoint=None):
             print(f"Saved on exit  fitness={best.fitness:.1f}  → {path}")
 
     def eval_genomes(genomes, cfg):
-        generation_counter[0] += 1
         gen = generation_counter[0]
+        generation_counter[0] += 1
+
+        # ACTION: Fetch specific Curriculum settings for the current generation
+        current_settings = curriculum.get_settings_for_generation(gen)
 
         genome_list = [g for _, g in genomes]
         n           = len(genome_list)
         for g in genome_list:
             g.fitness = -9999.0
 
-        runners = [GenomeRunner(g, cfg, base_cfg) for g in genome_list]
+        # Inject dynamic settings into the runners
+        runners = [GenomeRunner(g, cfg, current_settings) for g in genome_list]
 
-        # Compute grid from actual game surface size
         game_w  = GenomeRunner._game_w
         game_h  = GenomeRunner._game_h
         cols, rows, cell_w, cell_h = compute_grid_layout(n, game_w, game_h)
         win_w   = cols * cell_w
         win_h   = rows * cell_h + INFO_BAR_H
 
-        # Create / resize window
         if window[0] is None or window[0].get_size() != (win_w, win_h):
             window[0] = pygame.display.set_mode((win_w, win_h))
-            pygame.display.set_caption("NEAT Pac-Man — Visual Training")
+            pygame.display.set_caption("NEAT Pac-Man — Visual Curriculum Training")
 
         best_runner_idx = None
 
         while not all(r.done for r in runners):
-            # Handle events
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
                     _save_best_on_exit(genome_list)
@@ -340,16 +339,13 @@ def run(checkpoint=None):
                     _save_best_on_exit(genome_list)
                     pygame.quit(); sys.exit()
 
-            # Step all live runners
             for r in runners:
                 r.step()
 
-            # Find best alive runner for highlight
             alive = [i for i, r in enumerate(runners) if not r.done]
             if alive:
                 best_runner_idx = max(alive, key=lambda i: runners[i].total_reward)
 
-            # Draw grid
             game_area_h = rows * cell_h
             window[0].fill((15, 15, 15))
             for idx, r in enumerate(runners):
@@ -358,32 +354,29 @@ def run(checkpoint=None):
                             is_best=(idx == best_runner_idx),
                             label_font=label_font)
 
-            # Grid lines
             for c in range(1, cols):
-                pygame.draw.line(window[0], (40, 40, 40),
-                                 (c*cell_w, 0), (c*cell_w, game_area_h))
+                pygame.draw.line(window[0], (40, 40, 40), (c*cell_w, 0), (c*cell_w, game_area_h))
             for r in range(1, rows):
-                pygame.draw.line(window[0], (40, 40, 40),
-                                 (0, r*cell_h), (win_w, r*cell_h))
+                pygame.draw.line(window[0], (40, 40, 40), (0, r*cell_h), (win_w, r*cell_h))
 
-            # Info bar
             alive_count = sum(1 for r in runners if not r.done)
             best_r  = max(r.total_reward for r in runners)
             avg_r   = sum(r.total_reward for r in runners) / n
             info    = (f"Gen {gen}  |  Alive {alive_count}/{n}  |  "
                        f"Best: {best_r:+.0f}  |  Avg: {avg_r:+.0f}  |  "
                        f"FPS {fps_clock.get_fps():.0f}")
+
             window[0].fill((0, 0, 0), (0, game_area_h, win_w, INFO_BAR_H))
-            window[0].blit(info_font.render(info, True, (200, 200, 200)),
-                           (8, game_area_h + 10))
+            window[0].blit(info_font.render(info, True, (200, 200, 200)), (8, game_area_h + 10))
             pygame.display.flip()
             fps_clock.tick(TARGET_FPS)
 
-        # Assign final fitnesses
         for i, g in enumerate(genome_list):
             g.fitness = runners[i].total_reward
 
     try:
+        # Run 1 generation at a time to sync with the counter properly, or run full loop
+        # The while loop is handled natively by NEAT, we just pass the evaluator
         winner = population.run(eval_genomes, NUM_GENERATIONS)
         path = os.path.join(CHECKPOINT_DIR, "winner_genome.pkl")
         with open(path, "wb") as f:
@@ -401,4 +394,3 @@ if __name__ == "__main__":
     parser.add_argument("--checkpoint", type=str, default=None)
     args = parser.parse_args()
     run(checkpoint=args.checkpoint)
-
