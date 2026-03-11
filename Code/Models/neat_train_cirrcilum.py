@@ -50,25 +50,16 @@ PARALLEL         = True
 
 NODE_NAMES = {
     # ── Pac-Man State ──
-    -1: "Pac_X", -2: "Pac_Y", -3: "Pac_dX", -4: "Pac_dY",
-
-    # ── Ghost 0 (Blinky) ──
-    -5: "G0_relX", -6: "G0_relY", -7: "G0_Dist", -8: "G0_dX", -9: "G0_dY", -10: "G0_Threat",
-    # ── Ghost 1 (Pinky) ──
-    -11: "G1_relX", -12: "G1_relY", -13: "G1_Dist", -14: "G1_dX", -15: "G1_dY", -16: "G1_Threat",
-    # ── Ghost 2 (Inky) ──
-    -17: "G2_relX", -18: "G2_relY", -19: "G2_Dist", -20: "G2_dX", -21: "G2_dY", -22: "G2_Threat",
-    # ── Ghost 3 (Clyde) ──
-    -23: "G3_relX", -24: "G3_relY", -25: "G3_Dist", -26: "G3_dX", -27: "G3_dY", -28: "G3_Threat",
-
+    -1: "Pac_dX", -2: "Pac_dY",
+    # ── Closest Ghost 1 ──
+    -3: "G1_relX", -4: "G1_relY", -5: "G1_Threat",
+    # ── Closest Ghost 2 ──
+    -6: "G2_relX", -7: "G2_relY", -8: "G2_Threat",
     # ── Radar & Walls ──
-    -29: "Pellet_relX", -30: "Pellet_relY",
-    -31: "Wall_Up", -32: "Wall_Down", -33: "Wall_Left", -34: "Wall_Right",
-
-    # ── Global State ──
-    -35: "Pellet_Ratio", -36: "Fright_Active", -37: "Fright_Timer",
-    -38: "Lives", -39: "Scatter", -40: "PP_Dist",
-
+    -9: "Pellet_relX", -10: "Pellet_relY",
+    -11: "Wall_Up", -12: "Wall_Down", -13: "Wall_Left", -14: "Wall_Right",
+    # ── Power Pellet ──
+    -15: "PP_relX", -16: "PP_relY",
     # ── Outputs ──
     0: "UP", 1: "DOWN", 2: "LEFT", 3: "RIGHT"
 }

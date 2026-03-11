@@ -5,12 +5,13 @@ A Gymnasium-compatible environment that wraps the existing Pac-Man GameEngine.
 
 Observation Space
 -----------------
-A flat numpy array of 40 floats (normalised between -1.0 and 1.0):
-  [0-3]     Pac-Man State: pos_x, pos_y, dir_dx, dir_dy
-  [4-27]    Ghosts (x4): rel_x, rel_y, dist, dir_dx, dir_dy, threat_level
-  [28-29]   Pellet Radar: nearest_pellet_rel_x, nearest_pellet_rel_y
-  [30-33]   Wall Sensors: up, down, left, right (1.0 if wall, 0.0 otherwise)
-  [34-39]   Global State: pellet_ratio, frightened_active, frightened_timer, lives_ratio, scatter_mode, pp_dist
+A flat numpy array of 16 floats (normalised between -1.0 and 1.0):
+  [0-1]   Pac-Man Direction: dir_dx, dir_dy
+  [2-4]   Closest Ghost 1: rel_x, rel_y, threat_level
+  [5-7]   Closest Ghost 2: rel_x, rel_y, threat_level
+  [8-9]   Nearest Pellet: rel_x, rel_y
+  [10-13] Wall Sensors: up, down, left, right (1.0 if wall, 0.0 if empty)
+  [14-15] Nearest Power Pellet: rel_x, rel_y
 
 Action Space
 ------------
@@ -139,8 +140,8 @@ class PacManEnv(gym.Env):
             w, h = self._parse_res(res_str)
             self.observation_space = spaces.Box(low=0, high=255, shape=(h, w, 3), dtype=np.uint8)
         else:
-            # The finalized 40-element vector
-            self.observation_space = spaces.Box(low=-1.0, high=1.0, shape=(40,), dtype=np.float32)
+            # New compact 16-element vector observation
+            self.observation_space = spaces.Box(low=-1.0, high=1.0, shape=(16,), dtype=np.float32)
 
         self._prev_score = 0
         self._prev_lives = 3
@@ -272,40 +273,79 @@ class PacManEnv(gym.Env):
         self._pygame_initialised = True
 
     def _draw_debug_sensors(self):
-        """Visualizes the AI's 40-element input vector strictly using center-mass math."""
+        """Visualizes the current 16-element observation (nearest pellet, 2 ghosts, walls, power pellet)."""
         if self._screen is None or self._engine is None:
             return
 
         eng = self._engine
         ts = eng.tile_size
 
-        # ACTION: Strict Center Mass Anchor (Top-left origin is banned)
+        # Pac-Man center (anchor for all sensors)
         pac_cx = int(eng.pacman.x + (ts / 2))
         pac_cy = int(eng.pacman.y + (ts / 2))
         pac_center = (pac_cx, pac_cy)
 
-        # 1. Pellet Radar (Green)
-        if eng.pellets or eng.power_pellets:
-            all_p = eng.pellets + eng.power_pellets
-            # PELLETS are already PRE-CALCULATED as center-mass pixel coordinates in GameEngine
-            px_coords = all_p
-            dists = [(px[0] - pac_cx) ** 2 + (px[1] - pac_cy) ** 2 for px in px_coords]
-
-            target_px = px_coords[np.argmin(dists)]
-            # Draw GREEN line using purely centered, scaled pixels
-            pygame.draw.line(self._screen, (0, 255, 0), pac_center, target_px, 2)
-
-        # 2. Ghost Tracking
+        # ----- Ghost sensors: draw only the two closest ghosts used in obs -----
+        active_ghosts = []
         for g in eng.ghosts:
-            color = (255, 0, 0) if g.state in [GhostState.CHASE, GhostState.SCATTER] else (0, 255, 255)
-            g_center = (int(g.x + (ts / 2)), int(g.y + (ts / 2)))
-            pygame.draw.line(self._screen, color, pac_center, g_center, 1)
+            if g.state == GhostState.EATEN or g.state == GhostState.SPAWNING:
+                continue
+            g_cx = g.x + (ts / 2.0)
+            g_cy = g.y + (ts / 2.0)
+            dx = g_cx - pac_cx
+            dy = g_cy - pac_cy
+            dist_sq = dx * dx + dy * dy
+            active_ghosts.append((dist_sq, g, g_cx, g_cy))
 
-        # 3. Wall Sensors
+        active_ghosts.sort(key=lambda t: t[0])
+
+        # Draw up to two ghosts with distinct colours
+        ghost_colors = [(255, 0, 0), (255, 128, 0)]  # closest, second-closest
+        for idx in range(min(2, len(active_ghosts))):
+            _, g, g_cx, g_cy = active_ghosts[idx]
+            color = ghost_colors[idx]
+            pygame.draw.line(self._screen, color, pac_center, (int(g_cx), int(g_cy)), 2)
+
+        # ----- Nearest normal pellet (green) -----
+        nearest_pellet = None
+        if eng.pellets:
+            dists = []
+            for px, py in eng.pellets:
+                dx = px - pac_cx
+                dy = py - pac_cy
+                dists.append((dx * dx + dy * dy, (px, py)))
+            dists.sort(key=lambda t: t[0])
+            _, nearest_pellet = dists[0]
+
+        if nearest_pellet is not None:
+            pygame.draw.line(self._screen, (0, 255, 0), pac_center,
+                             (int(nearest_pellet[0]), int(nearest_pellet[1])), 2)
+
+        # ----- Nearest power pellet (blue) -----
+        nearest_power = None
+        if eng.power_pellets:
+            dists = []
+            for px, py in eng.power_pellets:
+                dx = px - pac_cx
+                dy = py - pac_cy
+                dists.append((dx * dx + dy * dy, (px, py)))
+            dists.sort(key=lambda t: t[0])
+            _, nearest_power = dists[0]
+
+        if nearest_power is not None:
+            pygame.draw.line(self._screen, (0, 128, 255), pac_center,
+                             (int(nearest_power[0]), int(nearest_power[1])), 2)
+
+        # ----- Wall sensors (yellow circles): up, down, left, right -----
         for dx, dy in [(0, -ts), (0, ts), (-ts, 0), (ts, 0)]:
             sensor_px = (pac_cx + dx, pac_cy + dy)
             tx, ty = int(sensor_px[0] / ts), int(sensor_px[1] / ts)
-            if not (0 <= tx < eng.maze.width and 0 <= ty < eng.maze.height) or eng.maze.maze[ty][tx] == 1:
+            is_wall = False
+            if not (0 <= tx < eng.maze.width and 0 <= ty < eng.maze.height):
+                is_wall = True
+            else:
+                is_wall = eng.maze.maze[ty][tx] == 1
+            if is_wall:
                 pygame.draw.circle(self._screen, (255, 255, 0), sensor_px, 5, 1)
 
     def _render_human(self):
@@ -344,66 +384,105 @@ class PacManEnv(gym.Env):
         return self._get_vector_obs()
 
     def _get_vector_obs(self) -> np.ndarray:
+        """Return the 16-element dense observation vector for NEAT."""
         eng = self._engine
         ts = eng.tile_size
         mw_px, mh_px = eng.maze.width * ts, eng.maze.height * ts
 
-        # ACTION: Establish strict center-mass for neural network inputs
+        # 1) Pac-Man center mass and direction
         pac_cx = eng.pacman.x + (ts / 2.0)
         pac_cy = eng.pacman.y + (ts / 2.0)
+        dir_dx, dir_dy = eng.pacman.direction
 
-        # [0-3] Pac-Man
-        obs = [pac_cx / mw_px, pac_cy / mh_px, float(eng.pacman.direction[0]), float(eng.pacman.direction[1])]
+        obs: list[float] = []
 
-        # [4-27] Ghosts
-        for i in range(4):
-            if i < len(eng.ghosts):
-                g = eng.ghosts[i]
-                g_cx = g.x + (ts / 2.0)
-                g_cy = g.y + (ts / 2.0)
+        # [0-1] Pac-Man direction
+        obs.append(float(dir_dx))
+        obs.append(float(dir_dy))
 
-                rel_x = (g_cx - pac_cx) / mw_px
-                rel_y = (g_cy - pac_cy) / mh_px
-                dist = np.sqrt(rel_x ** 2 + rel_y ** 2)
+        # 2) K-nearest ghosts (excluding EATEN and only spawned ones)
+        active_ghosts = []
+        for g in eng.ghosts:
+            # Skip ghosts that are effectively not on the board
+            if g.state == GhostState.EATEN:
+                continue
+            # Some implementations might have a "spawning" or off-screen condition; we
+            # treat SPAWNING as not yet a threat, so you can decide to include/exclude.
+            if g.state == GhostState.SPAWNING:
+                continue
 
-                threat = 1.0 if g.state in [GhostState.CHASE, GhostState.SCATTER] else (
-                    -1.0 if g.state == GhostState.FRIGHTENED else 0.0)
-                obs.extend([rel_x, rel_y, dist, float(g.current_dir[0]), float(g.current_dir[1]), threat])
+            g_cx = g.x + (ts / 2.0)
+            g_cy = g.y + (ts / 2.0)
+            dx = g_cx - pac_cx
+            dy = g_cy - pac_cy
+            dist_sq = dx * dx + dy * dy
+            active_ghosts.append((dist_sq, g_cx, g_cy, g.state))
+
+        # Sort by distance ascending
+        active_ghosts.sort(key=lambda t: t[0])
+
+        def _encode_ghost(g_cx: float, g_cy: float, state) -> list[float]:
+            rel_x = (g_cx - pac_cx) / mw_px
+            rel_y = (g_cy - pac_cy) / mh_px
+            if state in (GhostState.CHASE, GhostState.SCATTER):
+                threat = 1.0
+            elif state == GhostState.FRIGHTENED:
+                threat = -1.0
             else:
-                obs.extend([0.0, 0.0, 1.5, 0.0, 0.0, 0.0])
+                threat = 0.0
+            return [rel_x, rel_y, float(threat)]
 
-        # [28-29] Pellet Radar (Center Mass Distance & Grid-to-Pixel Conversion)
-        p_rel = [0.0, 0.0]
-        if eng.pellets or eng.power_pellets:
-            all_p = eng.pellets + eng.power_pellets
-            # PELLETS are already PRE-CALCULATED as center-mass pixel coordinates in GameEngine
-            px_coords = all_p
-            dists = [(px[0] - pac_cx) ** 2 + (px[1] - pac_cy) ** 2 for px in px_coords]
+        # [2-4] Closest Ghost 1, [5-7] Closest Ghost 2
+        for k in range(2):
+            if k < len(active_ghosts):
+                _, g_cx, g_cy, g_state = active_ghosts[k]
+                obs.extend(_encode_ghost(g_cx, g_cy, g_state))
+            else:
+                # Pad when not enough ghosts
+                obs.extend([0.0, 0.0, 0.0])
 
-            target_px = px_coords[int(np.argmin(dists))]
-            p_rel = [(target_px[0] - pac_cx) / mw_px, (target_px[1] - pac_cy) / mh_px]
-        obs.extend(p_rel)
+        # 3) Nearest normal pellet (exclude power pellets)
+        # eng.pellets / eng.power_pellets are already in pixel center coordinates
+        pellet_rel = [0.0, 0.0]
+        if eng.pellets:
+            dists = []
+            for px, py in eng.pellets:
+                dx = px - pac_cx
+                dy = py - pac_cy
+                dists.append((dx * dx + dy * dy, px, py))
+            dists.sort(key=lambda t: t[0])
+            _, px, py = dists[0]
+            pellet_rel = [(px - pac_cx) / mw_px, (py - pac_cy) / mh_px]
+        # [8-9]
+        obs.extend(pellet_rel)
 
-        # [30-33] Walls (Center Mass Boundary Checking)
-        tx, ty = int(pac_cx / ts), int(pac_cy / ts)
+        # 4) Wall sensors: up, down, left, right
+        tx = int(pac_cx / ts)
+        ty = int(pac_cy / ts)
+        wall_vals: list[float] = []
+        # Up, Down, Left, Right in tile space
         for dx, dy in [(0, -1), (0, 1), (-1, 0), (1, 0)]:
             nx, ny = tx + dx, ty + dy
-            is_wall = 1.0 if not (0 <= nx < eng.maze.width and 0 <= ny < eng.maze.height) or eng.maze.maze[ny][
-                nx] == 1 else 0.0
-            obs.append(is_wall)
+            if not (0 <= nx < eng.maze.width and 0 <= ny < eng.maze.height):
+                wall_vals.append(1.0)
+            else:
+                wall_vals.append(1.0 if eng.maze.maze[ny][nx] == 1 else 0.0)
+        # [10-13]
+        obs.extend(wall_vals)
 
-        # [34-39] Global (Power Pellet Center Mass & Grid-to-Pixel Conversion)
-        total_p = max(eng.pellets_eaten_this_level + len(eng.pellets), 1)
-        pp_dist = 1.5
+        # 5) Nearest power pellet
+        pp_rel = [0.0, 0.0]
         if eng.power_pellets:
-            # PELLETS are already PRE-CALCULATED as center-mass pixel coordinates in GameEngine
-            pp_coords = eng.power_pellets
-            pp_dists = [(px[0] - pac_cx) ** 2 + (px[1] - pac_cy) ** 2 for px in pp_coords]
-            pp_dist = np.sqrt(min(pp_dists)) / mw_px
-
-        obs.extend([eng.pellets_eaten_this_level / total_p, 1.0 if eng.frightened_mode else 0.0,
-                    eng.frightened_timer / max(eng.frightened_duration, 1), eng.lives / 3.0,
-                    1.0 if eng.global_scatter_mode else 0.0, pp_dist])
+            dists = []
+            for px, py in eng.power_pellets:
+                dx = px - pac_cx
+                dy = py - pac_cy
+                dists.append((dx * dx + dy * dy, px, py))
+            dists.sort(key=lambda t: t[0])
+            _, px, py = dists[0]
+            pp_rel = [(px - pac_cx) / mw_px, (py - pac_cy) / mh_px]
+        # [14-15]
+        obs.extend(pp_rel)
 
         return np.array(obs, dtype=np.float32)
 
