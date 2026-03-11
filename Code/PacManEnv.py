@@ -212,13 +212,15 @@ class PacManEnv(gym.Env):
             reward += 100.0  # High win bonus
             self._won_already = True
             self._levels_completed += 1
-            self._engine.next_level()
-            self._won_already = False
-            self._prev_score = self._engine.pacman.score
+            # ACTION: Infinite loop amputated. We DO NOT call next_level() here.
 
-        terminated = self._engine.game_over
+        # ACTION: Terminate episode immediately if Pac-Man dies OR wins
+        terminated = self._engine.game_over or self._engine.won
         truncated = (self._step_count >= self.max_episode_steps)
-        if terminated: reward -= 50.0
+
+        # ACTION: Apply death penalty strictly upon death (not winning)
+        if self._engine.game_over:
+            reward -= 50.0
 
         if self.render_mode == "human": self._render_human()
         return self._get_obs(), reward, terminated, truncated, self._get_info()

@@ -128,7 +128,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--generation",
         type=int,
-        default=100,
+        default=1,
         help="Simulate the curriculum difficulty of this generation (default: 100 - full difficulty)",
     )
     parser.add_argument(
