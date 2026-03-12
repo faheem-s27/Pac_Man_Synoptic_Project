@@ -22,10 +22,11 @@ class CurriculumManager:
         if generation_id < 20:
             print(f"--- CURRICULUM STAGE 1 (Gen {generation_id}): Eat 10 Pellets, No Ghosts, 1 Life ---")
             settings['enable_ghosts'] = False
-            settings['pellets_to_win'] = 10
+            settings['pellets_to_win'] = 20
             settings['lives'] = 1
             settings['active_ghost_count'] = 0
             settings['enable_power_pellets'] = False  # ACTION: Remove the perimeter exploit
+            settings['max_episode_steps'] = 500
 
         # --- STAGE 2: Spatial Mastery (Gens 20-74) ---
         elif generation_id < 75:
@@ -35,6 +36,7 @@ class CurriculumManager:
             settings['active_ghost_count'] = 0
             settings['lives'] = 1
             settings['enable_power_pellets'] = False  # ACTION: Force internal maze navigation
+            settings['max_episode_steps'] = 2000
 
         # --- STAGE 3: Introduction to Fear (Gens 75-119) ---
         elif generation_id < 120:
@@ -44,6 +46,7 @@ class CurriculumManager:
             settings['active_ghost_count'] = 1
             settings['lives'] = 1
             settings['enable_power_pellets'] = True  # ACTION: Restore for threat mitigation
+            settings['max_episode_steps'] = 3000
 
         # --- STAGE 4: Rising Difficulty (Gens 120-159) ---
         elif generation_id < 160:
@@ -53,6 +56,7 @@ class CurriculumManager:
             settings['active_ghost_count'] = 2
             settings['lives'] = 2
             settings['enable_power_pellets'] = True
+            settings['max_episode_steps'] = 4000
 
         # --- STAGE 5: Full Game (Gens 160+) ---
         else:
@@ -62,5 +66,6 @@ class CurriculumManager:
             settings['active_ghost_count'] = 4
             settings['lives'] = 3
             settings['enable_power_pellets'] = True
+            settings['max_episode_steps'] = 5000
 
         return settings

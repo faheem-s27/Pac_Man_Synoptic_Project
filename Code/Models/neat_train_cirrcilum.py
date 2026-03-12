@@ -157,8 +157,8 @@ def eval_genome(genome, config):
             obs_type="vector",
             maze_seed=seed,
             maze_algorithm="recursive_backtracking",
-            max_episode_steps=MAX_STEPS,
-            settings=CURRENT_SETTINGS  # <-- New: Dynamic Curriculum Settings
+            settings=CURRENT_SETTINGS,  # <-- New: Dynamic Curriculum Settings
+            max_episode_steps=CURRENT_SETTINGS.get('max_episode_steps', 2000),
         )
 
         obs, _ = env.reset()

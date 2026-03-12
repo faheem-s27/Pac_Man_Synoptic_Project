@@ -57,6 +57,7 @@ import pygame
 from Code.Settings import Settings
 from Code.GameEngine import GameEngine, GameState
 from Code.Ghost import GhostState
+from Code.Pathfinding import Pathfinding
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -113,15 +114,15 @@ class PacManEnv(gym.Env):
             obs_type: str = "vector",
             settings: dict | None = None,
             settings_path: str | None = None, # Legacy: kept for compatibility
-            max_episode_steps: int = 2000,
+            max_episode_steps: int = 500,
             maze_seed: int | None = None,
             maze_algorithm: str = "recursive_backtracking",
             **engine_kwargs,
     ):
         super().__init__()
+        self._last_action = None
         self.render_mode = render_mode
         self.obs_type = obs_type
-        self.max_episode_steps = max_episode_steps
         self.maze_seed = maze_seed
         self._step_count = 0
 
@@ -129,6 +130,7 @@ class PacManEnv(gym.Env):
         self._base_cfg = _load_settings(settings if settings else settings_path)
         self._base_cfg.update(engine_kwargs)
 
+        self.max_episode_steps = self._base_cfg.get("max_episode_steps", max_episode_steps)
         self._pygame_initialised = False
         self._screen = None
         self._clock = None
@@ -148,6 +150,8 @@ class PacManEnv(gym.Env):
         self._prev_lives = 3
         self._won_already = False
         self._levels_completed = 0
+
+        self._stuck_frames = 0
 
     # ── Lifecycle ─────────────────────────────────────────────────────────────
 
@@ -177,6 +181,9 @@ class PacManEnv(gym.Env):
         self._step_count = 0
         self._levels_completed = 0
 
+        self._last_action = None
+        self._stuck_frames = 0
+
         # Return first observation
         return self._get_obs(), {}
 
@@ -201,6 +208,33 @@ class PacManEnv(gym.Env):
 
         # Reward logic
         reward = -0.01  # Step penalty
+
+        # ACTION: Apply the 180-degree Reversal Penalty
+        if self._last_action is not None:
+            # Reversal pairs: 0-1 (UP-DOWN), 2-3 (LEFT-RIGHT)
+            is_reversal = False
+            if self._last_action == 0 and action == 1: is_reversal = True  # UP to DOWN
+            if self._last_action == 1 and action == 0: is_reversal = True  # DOWN to UP
+            if self._last_action == 2 and action == 3: is_reversal = True  # LEFT to RIGHT
+            if self._last_action == 3 and action == 2: is_reversal = True  # RIGHT to LEFT
+
+            if is_reversal:
+                reward -= 2.0  # Significant tax on vibrating behavior
+
+        # Update the action memory for the next frame
+        self._last_action = action
+
+        # If Pac-Man is stationary (hit a wall and didn't provide a valid turn)
+        if self._engine.pacman.direction == (0, 0):
+            self._stuck_frames += 1
+        else:
+            self._stuck_frames = 0  # Reset immediately upon moving
+
+        # If stuck for 30 consecutive frames, kill it
+        if self._stuck_frames >= 30:
+            reward -= 50.0
+            self._engine.game_over = True
+
         score_delta = self._engine.pacman.score - self._prev_score
         if score_delta > 0:
             reward += float(score_delta) / 2.0
@@ -259,6 +293,11 @@ class PacManEnv(gym.Env):
             pygame.init()
             self._screen = None
         elif self.render_mode == "human":
+            # Remove headless driver overrides so a real window can be created,
+            # even if a previous headless environment set these variables.
+            for _var in ("SDL_VIDEODRIVER", "SDL_AUDIODRIVER"):
+                if os.environ.get(_var) == "dummy":
+                    del os.environ[_var]
             pygame.init()
             res_str = self._base_cfg.get("window_resolution", "800x800")
             w, h    = self._parse_res(res_str)
@@ -274,7 +313,7 @@ class PacManEnv(gym.Env):
         self._pygame_initialised = True
 
     def _draw_debug_sensors(self):
-        """Visualizes the current 16-element observation (nearest pellet, 2 ghosts, walls, power pellet)."""
+        """Visualizes the current 16-element observation (Pure Euclidean straight-lines)."""
         if self._screen is None or self._engine is None:
             return
 
@@ -286,67 +325,52 @@ class PacManEnv(gym.Env):
         pac_cy = int(eng.pacman.y + (ts / 2))
         pac_center = (pac_cx, pac_cy)
 
-        # ----- Ghost sensors: draw only the two closest ghosts used in obs -----
+        # ----- Ghost sensors (Euclidean) -----
         active_ghosts = []
         for g in eng.ghosts:
-            if g.state == GhostState.EATEN or g.state == GhostState.SPAWNING:
+            if g.state in (GhostState.EATEN, GhostState.SPAWNING):
                 continue
             g_cx = g.x + (ts / 2.0)
             g_cy = g.y + (ts / 2.0)
             dx = g_cx - pac_cx
             dy = g_cy - pac_cy
             dist_sq = dx * dx + dy * dy
-            active_ghosts.append((dist_sq, g, g_cx, g_cy))
+            active_ghosts.append((dist_sq, g_cx, g_cy))
 
         active_ghosts.sort(key=lambda t: t[0])
 
-        # Draw up to two ghosts with distinct colours
         ghost_colors = [(255, 0, 0), (255, 128, 0)]  # closest, second-closest
         for idx in range(min(2, len(active_ghosts))):
-            _, g, g_cx, g_cy = active_ghosts[idx]
-            color = ghost_colors[idx]
-            pygame.draw.line(self._screen, color, pac_center, (int(g_cx), int(g_cy)), 2)
+            _, g_cx, g_cy = active_ghosts[idx]
+            pygame.draw.line(self._screen, ghost_colors[idx], pac_center, (int(g_cx), int(g_cy)), 2)
 
-        # ----- Nearest normal pellet (green) -----
-        nearest_pellet = None
+        # ----- Nearest normal pellet (Euclidean, Green) -----
         if eng.pellets:
             dists = []
             for px, py in eng.pellets:
                 dx = px - pac_cx
                 dy = py - pac_cy
-                dists.append((dx * dx + dy * dy, (px, py)))
+                dists.append((dx * dx + dy * dy, px, py))
             dists.sort(key=lambda t: t[0])
-            _, nearest_pellet = dists[0]
+            _, nearest_px, nearest_py = dists[0]
+            pygame.draw.line(self._screen, (0, 255, 0), pac_center, (int(nearest_px), int(nearest_py)), 2)
 
-        if nearest_pellet is not None:
-            pygame.draw.line(self._screen, (0, 255, 0), pac_center,
-                             (int(nearest_pellet[0]), int(nearest_pellet[1])), 2)
-
-        # ----- Nearest power pellet (blue) -----
-        nearest_power = None
+        # ----- Nearest power pellet (Euclidean, Blue) -----
         if eng.power_pellets:
             dists = []
             for px, py in eng.power_pellets:
                 dx = px - pac_cx
                 dy = py - pac_cy
-                dists.append((dx * dx + dy * dy, (px, py)))
+                dists.append((dx * dx + dy * dy, px, py))
             dists.sort(key=lambda t: t[0])
-            _, nearest_power = dists[0]
+            _, nearest_px, nearest_py = dists[0]
+            pygame.draw.line(self._screen, (0, 128, 255), pac_center, (int(nearest_px), int(nearest_py)), 2)
 
-        if nearest_power is not None:
-            pygame.draw.line(self._screen, (0, 128, 255), pac_center,
-                             (int(nearest_power[0]), int(nearest_power[1])), 2)
-
-        # ----- Wall sensors (yellow circles): up, down, left, right -----
+        # ----- Wall sensors (Strictly local, Yellow circles) -----
         for dx, dy in [(0, -ts), (0, ts), (-ts, 0), (ts, 0)]:
             sensor_px = (pac_cx + dx, pac_cy + dy)
             tx, ty = int(sensor_px[0] / ts), int(sensor_px[1] / ts)
-            is_wall = False
-            if not (0 <= tx < eng.maze.width and 0 <= ty < eng.maze.height):
-                is_wall = True
-            else:
-                is_wall = eng.maze.maze[ty][tx] == 1
-            if is_wall:
+            if not (0 <= tx < eng.maze.width and 0 <= ty < eng.maze.height) or eng.maze.maze[ty][tx] == 1:
                 pygame.draw.circle(self._screen, (255, 255, 0), sensor_px, 5, 1)
 
     def _render_human(self):
@@ -385,12 +409,11 @@ class PacManEnv(gym.Env):
         return self._get_vector_obs()
 
     def _get_vector_obs(self) -> np.ndarray:
-        """Return the 16-element dense observation vector for NEAT."""
+        """Return the 16-element dense Euclidean observation vector."""
         eng = self._engine
         ts = eng.tile_size
         mw_px, mh_px = eng.maze.width * ts, eng.maze.height * ts
 
-        # 1) Pac-Man center mass and direction
         pac_cx = eng.pacman.x + (ts / 2.0)
         pac_cy = eng.pacman.y + (ts / 2.0)
         dir_dx, dir_dy = eng.pacman.direction
@@ -401,17 +424,11 @@ class PacManEnv(gym.Env):
         obs.append(float(dir_dx))
         obs.append(float(dir_dy))
 
-        # 2) K-nearest ghosts (excluding EATEN and only spawned ones)
+        # 2) K-nearest ghosts (Pure Euclidean + State Threat)
         active_ghosts = []
         for g in eng.ghosts:
-            # Skip ghosts that are effectively not on the board
-            if g.state == GhostState.EATEN:
+            if g.state in (GhostState.EATEN, GhostState.SPAWNING):
                 continue
-            # Some implementations might have a "spawning" or off-screen condition; we
-            # treat SPAWNING as not yet a threat, so you can decide to include/exclude.
-            if g.state == GhostState.SPAWNING:
-                continue
-
             g_cx = g.x + (ts / 2.0)
             g_cy = g.y + (ts / 2.0)
             dx = g_cx - pac_cx
@@ -419,7 +436,6 @@ class PacManEnv(gym.Env):
             dist_sq = dx * dx + dy * dy
             active_ghosts.append((dist_sq, g_cx, g_cy, g.state))
 
-        # Sort by distance ascending
         active_ghosts.sort(key=lambda t: t[0])
 
         def _encode_ghost(g_cx: float, g_cy: float, state) -> list[float]:
@@ -439,11 +455,9 @@ class PacManEnv(gym.Env):
                 _, g_cx, g_cy, g_state = active_ghosts[k]
                 obs.extend(_encode_ghost(g_cx, g_cy, g_state))
             else:
-                # Pad when not enough ghosts
                 obs.extend([0.0, 0.0, 0.0])
 
-        # 3) Nearest normal pellet (exclude power pellets)
-        # eng.pellets / eng.power_pellets are already in pixel center coordinates
+        # 3) Nearest normal pellet (Pure Euclidean)
         pellet_rel = [0.0, 0.0]
         if eng.pellets:
             dists = []
@@ -457,11 +471,10 @@ class PacManEnv(gym.Env):
         # [8-9]
         obs.extend(pellet_rel)
 
-        # 4) Wall sensors: up, down, left, right
+        # 4) Wall sensors: up, down, left, right (Strictly Local)
         tx = int(pac_cx / ts)
         ty = int(pac_cy / ts)
         wall_vals: list[float] = []
-        # Up, Down, Left, Right in tile space
         for dx, dy in [(0, -1), (0, 1), (-1, 0), (1, 0)]:
             nx, ny = tx + dx, ty + dy
             if not (0 <= nx < eng.maze.width and 0 <= ny < eng.maze.height):
@@ -471,7 +484,7 @@ class PacManEnv(gym.Env):
         # [10-13]
         obs.extend(wall_vals)
 
-        # 5) Nearest power pellet
+        # 5) Nearest power pellet (Pure Euclidean)
         pp_rel = [0.0, 0.0]
         if eng.power_pellets:
             dists = []

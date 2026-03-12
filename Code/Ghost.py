@@ -229,7 +229,7 @@ class Ghost:
             cage_gx, cage_gy = target_tile
             # Allow wraparound so ghosts can always find a route from tunnel edges.
             self.path = self.pathfinding.find_shortest_path(
-                current_gx, current_gy, cage_gx, cage_gy, (0, 0), allow_wraparound=True
+                current_gx, current_gy, cage_gx, cage_gy, (0, 0)
             )
             self.path_index = 0
 
@@ -389,7 +389,7 @@ class Ghost:
 
         # Recalculate path if needed
         self.path = self.pathfinding.find_shortest_path(
-            current_gx, current_gy, cage_gx, cage_gy, (0, 0), allow_wraparound=True
+            current_gx, current_gy, cage_gx, cage_gy, (0, 0)
         )
         self.path_index = 0
 

@@ -139,7 +139,6 @@ def eval_genome(genome, config):
             obs_type="vector",
             maze_seed=seed,
             maze_algorithm="recursive_backtracking",
-            max_episode_steps=MAX_STEPS,
             settings=FIXED_SETTINGS  # Full difficulty, always
         )
 

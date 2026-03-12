@@ -36,8 +36,8 @@ if _ROOT not in sys.path:
 
 from Code.GameEngine import GameEngine, GameState
 from Code.Ghost      import GhostState
-from Code.Settings   import Settings
 from Code.CurriculumManager import CurriculumManager
+from Code.Pathfinding import Pathfinding
 
 # ─── Tunables ────────────────────────────────────────────────────────────────
 MAZE_ALGORITHM  = "recursive_backtracking"
@@ -100,103 +100,119 @@ class GenomeRunner:
     _game_h: int = 0
 
     def __init__(self, genome, config, env_settings: dict):
-        self.genome       = genome
-        self.net          = neat.nn.FeedForwardNetwork.create(genome, config)
-        self.engine       = _make_engine(env_settings)
-        self.done         = False
+        self.genome = genome
+        self.net = neat.nn.FeedForwardNetwork.create(genome, config)
+        self.engine = _make_engine(env_settings)
+        self.done = False
         self.total_reward = 0.0
-        self.steps        = 0
-        self.prev_score   = 0
-        self.prev_lives   = self.engine.lives
+        self.steps = 0
+        self.prev_score = 0
+        self.prev_lives = self.engine.lives
+        self._last_action = None
+        self._locked_pellet = None
+        self.max_steps = env_settings.get('max_episode_steps', MAX_STEPS)
 
         GenomeRunner._game_w = self.engine.screen_width
         GenomeRunner._game_h = self.engine.screen_height
         self._surf = pygame.Surface((GenomeRunner._game_w, GenomeRunner._game_h))
 
-    # ── build observation vector (mirrors PacManEnv._get_vector_obs exactly) ──
     def _obs(self) -> list[float]:
         eng = self.engine
-        ts  = eng.tile_size
-        mw  = eng.maze.width  * ts
-        mh  = eng.maze.height * ts
+        ts = eng.tile_size
+        mw_px, mh_px = eng.maze.width * ts, eng.maze.height * ts
 
-        # ACTION: Strict Center Mass Anchor (Top-left origin is banned)
         pac_cx = eng.pacman.x + (ts / 2.0)
         pac_cy = eng.pacman.y + (ts / 2.0)
+        pac_dir = eng.pacman.direction
+        pac_tx, pac_ty = int(pac_cx / ts), int(pac_cy / ts)
 
-        # [0-3] Pac-Man
-        obs = [pac_cx / mw, pac_cy / mh, float(eng.pacman.direction[0]), float(eng.pacman.direction[1])]
+        pf = Pathfinding(eng.maze)
+        obs: list[float] = [float(pac_dir[0]), float(pac_dir[1])]
 
-        # [4-27] Ghosts
-        for i in range(4):
-            if i < len(eng.ghosts):
-                g  = eng.ghosts[i]
-                g_cx = g.x + (ts / 2.0)
-                g_cy = g.y + (ts / 2.0)
+        # 2) K-nearest ghosts (Topological + Proximity Threat)
+        active_ghosts = []
+        for g in eng.ghosts:
+            if g.state in (GhostState.EATEN, GhostState.SPAWNING): continue
+            g_tx, g_ty = int(g.x / ts), int(g.y / ts)
+            path = pf.find_shortest_path(pac_tx, pac_ty, g_tx, g_ty)
+            path_len = len(path) if path else 999
 
-                rx = (g_cx - pac_cx) / mw
-                ry = (g_cy - pac_cy) / mh
-                dist = (rx**2 + ry**2)**0.5
-
-                threat = (1.0 if g.state in (GhostState.CHASE, GhostState.SCATTER)
-                          else -1.0 if g.state == GhostState.FRIGHTENED else 0.0)
-                obs.extend([rx, ry, dist, float(g.current_dir[0]), float(g.current_dir[1]), threat])
+            if path and len(path) > 1:
+                nx, ny = path[1]
+                rx = ((nx * ts + ts / 2) - pac_cx) / mw_px
+                ry = ((ny * ts + ts / 2) - pac_cy) / mh_px
             else:
-                obs.extend([0.0, 0.0, 1.5, 0.0, 0.0, 0.0])
+                rx, ry = (g.x + ts / 2 - pac_cx) / mw_px, (g.y + ts / 2 - pac_cy) / mh_px
+            active_ghosts.append((path_len, rx, ry, g.state))
 
-        # [28-29] Nearest pellet radar
-        all_p = eng.pellets + eng.power_pellets
-        if all_p:
-            # PELLETS are already PRE-CALCULATED as center-mass pixel coordinates
-            dists = [(p[0]-pac_cx)**2 + (p[1]-pac_cy)**2 for p in all_p]
-            cp    = all_p[dists.index(min(dists))]
-            obs.extend([(cp[0]-pac_cx)/mw, (cp[1]-pac_cy)/mh])
-        else:
-            obs.extend([0.0, 0.0])
-
-        # [30-33] Wall sensors (Center Mass Boundary Checking)
-        cur_tx = int(pac_cx / ts)
-        cur_ty = int(pac_cy / ts)
-        for ddx, ddy in [(0,-1),(0,1),(-1,0),(1,0)]:
-            tx, ty = cur_tx+ddx, cur_ty+ddy
-            if 0 <= tx < eng.maze.width and 0 <= ty < eng.maze.height:
-                obs.append(1.0 if eng.maze.maze[ty][tx] == 1 else 0.0)
+        active_ghosts.sort(key=lambda t: t[0])
+        for k in range(2):
+            if k < len(active_ghosts):
+                p_len, rx, ry, state = active_ghosts[k]
+                prox = 1.0 / max(1, p_len)
+                threat = (1.0 if state != GhostState.FRIGHTENED else -1.0) * prox
+                obs.extend([rx, ry, float(threat)])
             else:
-                obs.append(1.0)
+                obs.extend([0.0, 0.0, 0.0])
 
-        # [34-39] Global state
-        total_p      = max(eng.pellets_eaten_this_level + len(eng.pellets), 1)
-        pellet_ratio = eng.pellets_eaten_this_level / total_p
-        frit_active  = 1.0 if eng.frightened_mode else 0.0
-        frit_time    = eng.frightened_timer / max(eng.frightened_duration, 1)
+        # 3) Nearest normal pellet (Topological Breadcrumb + Target Locking)
+        pellet_rel = [0.0, 0.0]
+        if eng.pellets:
+            if self._locked_pellet not in eng.pellets: self._locked_pellet = None
+            if self._locked_pellet is None:
+                dists = sorted(((px - pac_cx) ** 2 + (py - pac_cy) ** 2, (px, py)) for px, py in eng.pellets)
+                self._locked_pellet = dists[0][1]
 
-        pp_dist = 1.5
+            p_tx, p_ty = int(self._locked_pellet[0] / ts), int(self._locked_pellet[1] / ts)
+            path = pf.find_shortest_path(pac_tx, pac_ty, p_tx, p_ty, current_dir=pac_dir)
+            if path and len(path) > 1:
+                nx, ny = path[1]
+                pellet_rel = [((nx * ts + ts / 2) - pac_cx) / mw_px, ((ny * ts + ts / 2) - pac_cy) / mh_px]
+            else:
+                pellet_rel = [(self._locked_pellet[0] - pac_cx) / mw_px, (self._locked_pellet[1] - pac_cy) / mh_px]
+        obs.extend(pellet_rel)
+
+        # 4) Wall sensors
+        for ddx, ddy in [(0, -1), (0, 1), (-1, 0), (1, 0)]:
+            nx, ny = pac_tx + ddx, pac_ty + ddy
+            obs.append(1.0 if not (0 <= nx < eng.maze.width and 0 <= ny < eng.maze.height) or eng.maze.maze[ny][
+                nx] == 1 else 0.0)
+
+        # 5) Nearest power pellet
+        pp_rel = [0.0, 0.0]
         if eng.power_pellets:
-            pp_dist = min((p[0]-pac_cx)**2 + (p[1]-pac_cy)**2 for p in eng.power_pellets)**0.5 / mw
-
-        obs.extend([pellet_ratio, frit_active, frit_time,
-                    eng.lives / 3.0, 1.0 if eng.global_scatter_mode else 0.0, pp_dist])
+            dists = sorted(((px - pac_cx) ** 2 + (py - pac_cy) ** 2, (px, py)) for px, py in eng.power_pellets)
+            p_tx, p_ty = int(dists[0][1][0] / ts), int(dists[0][1][1] / ts)
+            path = pf.find_shortest_path(pac_tx, pac_ty, p_tx, p_ty, current_dir=pac_dir)
+            if path and len(path) > 1:
+                nx, ny = path[1]
+                pp_rel = [((nx * ts + ts / 2) - pac_cx) / mw_px, ((ny * ts + ts / 2) - pac_cy) / mh_px]
+            else:
+                pp_rel = [(dists[0][1][0] - pac_cx) / mw_px, (dists[0][1][1] - pac_cy) / mh_px]
+        obs.extend(pp_rel)
 
         return obs
 
-    # ── one simulation step ───────────────────────────────────────────────────
     def step(self):
-        if self.done:
-            return
+        if self.done: return
+        output = self.net.activate(self._obs())
+        action = int(np.argmax(output))
 
-        obs    = self._obs()
-        output = self.net.activate(obs)
-        action = int(np.argmax(output))  # ACTION: Robust argmax for 4-outputs
+        # 180-Degree Reversal Penalty
+        reward = -0.05
+        if self._last_action is not None:
+            reversal = False
+            if (self._last_action == 0 and action == 1) or (self._last_action == 1 and action == 0) or \
+                    (self._last_action == 2 and action == 3) or (self._last_action == 3 and action == 2):
+                reward -= 2.0
+        self._last_action = action
 
         self.engine.pacman.next_direction = DIR_MAP[action]
         self.engine.update()
         self.steps += 1
 
-        # Reward = score delta / 2.0 − time penalty (mirrors PacManEnv)
-        reward = -0.05
         score_delta = self.engine.pacman.score - self.prev_score
-        if score_delta > 0:
-            reward += float(score_delta) / 2.0
+        if score_delta > 0: reward += float(score_delta) / 2.0
         self.prev_score = self.engine.pacman.score
 
         if self.engine.lives < self.prev_lives:
@@ -208,10 +224,8 @@ class GenomeRunner:
             self.engine.next_level()
 
         self.total_reward += reward
-
-        if self.engine.game_over or self.steps >= MAX_STEPS:
-            if self.engine.game_over:
-                self.total_reward -= 50.0
+        if self.engine.game_over or self.steps >= self.max_steps:
+            if self.engine.game_over: self.total_reward -= 50.0
             self.genome.fitness = self.total_reward
             self.done = True
 
