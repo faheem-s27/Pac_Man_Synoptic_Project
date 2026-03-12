@@ -122,13 +122,13 @@ if __name__ == "__main__":
     parser.add_argument(
         "--genome",
         type=str,
-        default=os.path.join(_HERE, "checkpoints", "best_genome.pkl"),
+        default=os.path.join(_HERE, "checkpoints_standard", "best_genome.pkl"),
         help="Path to the pickled genome file",
     )
     parser.add_argument(
         "--generation",
         type=int,
-        default=108,
+        default=1000,
         help="Simulate the curriculum difficulty of this generation (default: 100 - full difficulty)",
     )
     parser.add_argument(

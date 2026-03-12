@@ -39,7 +39,7 @@ FIXED_SETTINGS = Settings(_SETTINGS_PATH).get_all()
 
 # ── Config ───────────────────────────────────────────────────────────────────
 MAX_STEPS       = 3_500
-NUM_GENERATIONS = 200
+NUM_GENERATIONS = 300
 CHECKPOINT_DIR  = os.path.join(_HERE, "checkpoints_standard")
 CONFIG_PATH     = os.path.join(_HERE, "neat_config.cfg")
 PARALLEL        = True
