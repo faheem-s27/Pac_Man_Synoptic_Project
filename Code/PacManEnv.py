@@ -113,7 +113,7 @@ class PacManEnv(gym.Env):
             obs_type: str = "vector",
             settings: dict | None = None,
             settings_path: str | None = None, # Legacy: kept for compatibility
-            max_episode_steps: int = 27_000,
+            max_episode_steps: int = 2000,
             maze_seed: int | None = None,
             maze_algorithm: str = "recursive_backtracking",
             **engine_kwargs,

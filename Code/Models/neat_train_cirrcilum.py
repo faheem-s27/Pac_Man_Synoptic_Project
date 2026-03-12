@@ -42,7 +42,7 @@ CURRICULUM = CurriculumManager()
 
 # ── Config ───────────────────────────────────────────────────────────────────
 # We define a static evaluation suite to ensure fair comparison across generations
-MAX_STEPS        = 3_500          # Increased to allow for multi-level survival
+MAX_STEPS        = 2000          # Increased to allow for multi-level survival
 NUM_GENERATIONS  = 400
 CHECKPOINT_DIR   = os.path.join(_HERE, "checkpoints")
 CONFIG_PATH      = os.path.join(_HERE, "neat_config.cfg") # Matched your previous filename
