@@ -359,24 +359,21 @@ class GameEngine:
     def _initialize_pellets(self):
         pellets = []
 
-        # Exclude the entire cage box (including one tile margin around it) UNCONDITIONALLY
-        cage_exclusion = set()
         m = self.maze
+        # Safely extract cage bounds (if present)
+        cage_left = getattr(m, 'cage_left', -1)
+        cage_right = getattr(m, 'cage_right', -1)
+        cage_top = getattr(m, 'cage_top', -1)
+        cage_bottom = getattr(m, 'cage_bottom', -1)
 
-        # Safely check if the maze has cage attributes (fallback for classic/custom mazes)
-        if hasattr(m, 'cage_top') and hasattr(m, 'cage_bottom') and hasattr(m, 'cage_left') and hasattr(m,
-                                                                                                        'cage_right'):
-            for gy in range(m.cage_top - 1, m.cage_bottom + 2):
-                for gx in range(m.cage_left - 1, m.cage_right + 2):
-                    cage_exclusion.add((gx, gy))
-
-        for y in range(self.maze.height):
-            for x in range(self.maze.width):
-                if (x, y) in cage_exclusion:
-                    continue
-                if self.maze.maze[y][x] == 0:
-                    pellets.append((x * self.tile_size + self.tile_size // 2,
-                                    y * self.tile_size + self.tile_size // 2))
+        for y in range(m.height):
+            for x in range(m.width):
+                if m.maze[y][x] == 0:
+                    # Match maze_viewer: exclude tiles that are inside the cage box
+                    in_cage = (cage_left <= x <= cage_right) and (cage_top <= y <= cage_bottom)
+                    if not in_cage:
+                        pellets.append((x * self.tile_size + self.tile_size // 2,
+                                        y * self.tile_size + self.tile_size // 2))
 
         total_possible = len(pellets)
 

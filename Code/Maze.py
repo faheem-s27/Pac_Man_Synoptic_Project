@@ -33,8 +33,6 @@ class Maze:
             self.door_x      = self.width  // 2
             self.door_y      = self.cage_top
 
-        # No teleport tunnels
-        self.teleport_row = None
 
     def handle_teleportation(self, x, y):
         """Teleportation disabled — returns position unchanged."""

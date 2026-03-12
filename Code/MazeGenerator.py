@@ -2,40 +2,16 @@ import random
 from Code.Pathfinding import validate_maze_connectivity
 
 
-BANNED_SEEDS_PATH = "C:/Users/fahee/Desktop/Coding/Pac Man Synoptic Project/Code/banned_seeds"
-
-
-def _load_banned_seeds(path=BANNED_SEEDS_PATH):
-    seeds = set()
-    try:
-        with open(path, "r") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    seeds.add(int(line))
-                except ValueError:
-                    continue
-    except FileNotFoundError:
-        pass
-    return seeds
-
-
-def _append_banned_seed(seed, path=BANNED_SEEDS_PATH):
-    try:
-        with open(path, "a") as f:
-            f.write(f"{int(seed)}\n")
-    except Exception:
-        pass
-
-
 def generate_maze(width=20, height=21,
                   algorithm="recursive_backtracking", seed=None,
                   validate=True, max_attempts=100):
+    """Generate a maze, optionally validating connectivity via flood-fill.
 
-    banned = _load_banned_seeds()
-
+    This version does NOT persist banned seeds to disk. It will simply
+    try up to max_attempts different seeds in-memory and return the
+    first maze that passes validate_maze_connectivity, or a best-effort
+    maze if none pass.
+    """
     # Normalize dimensions to odd values
     if width % 2 == 0:
         width += 1
@@ -55,7 +31,7 @@ def generate_maze(width=20, height=21,
         else:
             return generate_recursive_backtracking(width, height)
 
-    # No validation requested: preserve original behavior
+    # No validation requested: original behaviour
     if not validate:
         if seed is not None:
             random.seed(seed)
@@ -68,67 +44,50 @@ def generate_maze(width=20, height=21,
         else:
             return generate_recursive_backtracking(width, height)
 
-    # Validation path: try up to max_attempts for a valid seed, but never raise
+    # Validation path: in-memory retries only, no banned-seed persistence
     attempts = 0
-    current_seed = seed
+    current_seed = seed if seed is not None else random.randint(0, 2**31 - 1)
+    best_maze = None
 
     while attempts < max_attempts:
         attempts += 1
 
-        # If caller gave a specific seed:
-        if attempts == 1 and seed is not None:
-            # Use it even if banned, so we can confirm and log if still invalid
-            current_seed = seed
-        else:
-            # For subsequent attempts or when no seed provided, draw a fresh seed
-            current_seed = (current_seed + 1) % (2 ** 31 - 1)
-            if current_seed in banned:
-                continue
-
         # Build maze grid
         raw_maze = _build_with_seed(current_seed)
 
-        # Wrap in a light-weight object so validate_maze_connectivity can use width/height/maze and cage info
+        # Lightweight maze wrapper for validation
         class _TempMaze:
             def __init__(self, grid):
                 self.maze = grid
                 self.height = len(grid)
                 self.width = len(grid[0]) if self.height > 0 else 0
-                # Reuse ghost cage bounds stamped by create_ghost_cage
-                from Code.MazeGenerator import create_ghost_cage
-                bounds = create_ghost_cage.last_bounds
-                if bounds:
-                    cl, ct, cr, cb, dx, dy = bounds
-                    self.cage_left = cl
-                    self.cage_top = ct
-                    self.cage_right = cr
-                    self.cage_bottom = cb
-                    self.door_x = dx
-                    self.door_y = dy
-                else:
-                    self.cage_left = self.width // 2 - 3
-                    self.cage_top = self.height // 2 - 1
-                    self.cage_right = self.width // 2 + 3
-                    self.cage_bottom = self.height // 2 + 1
-                    self.door_x = self.width // 2
-                    self.door_y = self.cage_top
+
+                center_x = self.width // 2
+                center_y = self.height // 2
+                cage_w = 6
+                cage_h = 3
+
+                self.cage_left = center_x - cage_w // 2
+                self.cage_top = center_y - cage_h // 2
+                self.cage_right = self.cage_left + cage_w - 1
+                self.cage_bottom = self.cage_top + cage_h - 1
+                self.door_x = center_x
+                self.door_y = self.cage_top
 
         temp_maze = _TempMaze(raw_maze)
 
         if validate_maze_connectivity(temp_maze):
-            # If the original explicit seed turned out valid, great.
-            # If we had to resample, current_seed is the good seed we ended up with.
             return raw_maze
 
-        # Seed produced an invalid layout — log and continue silently
-        if current_seed not in banned:
-            print(f"[MazeValidator] Banning invalid maze seed: {current_seed}")
-            _append_banned_seed(current_seed)
-            banned.add(current_seed)
+        # Keep last tried maze as a fallback
+        best_maze = raw_maze
 
-    # As a last resort, fall back to a fresh unvalidated maze
-    print("[MazeValidator] Max attempts reached; returning best-effort maze.")
-    return _build_with_seed(random.randint(0, 2**31 - 1))
+        # Move to a new seed deterministically
+        current_seed = (current_seed + 1) % (2**31 - 1)
+
+    # As a last resort, return the last attempted maze even if not perfect
+    print("[MazeValidator] Max attempts reached; returning last generated maze (may not be fully connected).")
+    return best_maze if best_maze is not None else _build_with_seed(seed)
 
 
 # ---------------------------------------------------------------------------

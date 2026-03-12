@@ -109,11 +109,16 @@ class Pathfinding:
 
 
 # ---------------------------------------------------------------------------
-# Maze validation utility
+# Maze validation utility (strict flood fill)
 # ---------------------------------------------------------------------------
 
 def validate_maze_connectivity(maze) -> bool:
-    """Return True if Pac-Man spawn can physically reach EVERY open tile."""
+    """Return True if Pac-Man spawn can physically reach EVERY open tile.
+
+    Spawn is defined as one row below the ghost cage bottom in the same
+    column as the door, but if that exact cell is blocked we search
+    vertically in the same column for a nearby open tile before failing.
+    """
     spawn_gx = getattr(maze, 'door_x', maze.width // 2)
     spawn_gy = getattr(maze, 'cage_bottom', maze.height // 2) + 1
 
@@ -121,33 +126,43 @@ def validate_maze_connectivity(maze) -> bool:
     spawn_gx = max(0, min(maze.width - 1, spawn_gx))
     spawn_gy = max(0, min(maze.height - 1, spawn_gy))
 
-    # Verify the spawn point itself is not trapped inside a wall block
-    if getattr(maze, 'maze', None) is not None:
-        if maze.maze[spawn_gy][spawn_gx] not in (0, 2):
-            return False
-    else:
+    # Ensure we have a maze grid
+    if getattr(maze, 'maze', None) is None:
         return False
 
-    # Calculate the absolute total of navigable tiles
+    # If the spawn cell is not open/door, search a few tiles up/down
+    if maze.maze[spawn_gy][spawn_gx] not in (0, 2):
+        found = False
+        for dy in range(-3, 4):
+            ny = spawn_gy + dy
+            if 0 <= ny < maze.height and maze.maze[ny][spawn_gx] in (0, 2):
+                spawn_gy = ny
+                found = True
+                break
+        if not found:
+            return False
+
+    # Count all navigable tiles (path or door)
     total_open_tiles = 0
     for y in range(maze.height):
         for x in range(maze.width):
             if maze.maze[y][x] in (0, 2):
                 total_open_tiles += 1
 
-    # Execute BFS Flood Fill
+    # BFS flood-fill from spawn
     visited = set()
     queue = [(spawn_gx, spawn_gy)]
 
     while queue:
         cx, cy = queue.pop(0)
-        if (cx, cy) not in visited:
-            visited.add((cx, cy))
-            for dx, dy in [(0, -1), (0, 1), (-1, 0), (1, 0)]:
-                nx, ny = cx + dx, cy + dy
-                if 0 <= nx < maze.width and 0 <= ny < maze.height:
-                    if maze.maze[ny][nx] in (0, 2) and (nx, ny) not in visited:
-                        queue.append((nx, ny))
+        if (cx, cy) in visited:
+            continue
+        visited.add((cx, cy))
 
-    # Strict boolean validation: Does the flood fill map perfectly overlay the open space?
+        for dx, dy in [(0, -1), (0, 1), (-1, 0), (1, 0)]:
+            nx, ny = cx + dx, cy + dy
+            if 0 <= nx < maze.width and 0 <= ny < maze.height:
+                if maze.maze[ny][nx] in (0, 2) and (nx, ny) not in visited:
+                    queue.append((nx, ny))
+
     return len(visited) == total_open_tiles

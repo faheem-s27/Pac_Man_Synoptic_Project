@@ -50,7 +50,7 @@ if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser(description="Maze generation stress-test utility.")
-    parser.add_argument("--trials", type=int, default=1000,
+    parser.add_argument("--trials", type=int, default=100000,
                         help="Maximum number of random mazes to attempt.")
     parser.add_argument("--algorithm", type=str, default="recursive_backtracking",
                         choices=["recursive_backtracking", "prims", "random_walk"],
