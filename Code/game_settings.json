@@ -6,7 +6,7 @@
   "use_classic_maze": false,
   "maze_algorithm": "recursive_backtracking",
   "maze_seed": 22459265,
-  "enable_ghosts": true,
+  "enable_ghosts": false,
   "enable_sound": false,
   "lives": 3,
   "god_mode": false,

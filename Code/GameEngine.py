@@ -360,10 +360,13 @@ class GameEngine:
     def _initialize_pellets(self):
         pellets = []
 
-        # Exclude the entire cage box (including one tile margin around it)
+        # Exclude the entire cage box (including one tile margin around it) UNCONDITIONALLY
         cage_exclusion = set()
-        if self.enable_ghosts:
-            m = self.maze
+        m = self.maze
+
+        # Safely check if the maze has cage attributes (fallback for classic/custom mazes)
+        if hasattr(m, 'cage_top') and hasattr(m, 'cage_bottom') and hasattr(m, 'cage_left') and hasattr(m,
+                                                                                                        'cage_right'):
             for gy in range(m.cage_top - 1, m.cage_bottom + 2):
                 for gx in range(m.cage_left - 1, m.cage_right + 2):
                     cage_exclusion.add((gx, gy))

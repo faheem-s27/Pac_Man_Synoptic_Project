@@ -1,4 +1,5 @@
 import random
+from Code.Pathfinding import validate_maze_connectivity
 
 # Maze layout: 0 = path, 1 = wall
 CLASSIC_MAZE = [
@@ -25,27 +26,135 @@ CLASSIC_MAZE = [
     [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
 ]
 
+BANNED_SEEDS_PATH = "C:/Users/fahee/Desktop/Coding/Pac Man Synoptic Project/Code/banned_seeds"
 
-def generate_maze(use_classic=True, width=20, height=21, algorithm="recursive_backtracking", seed=None):
+
+def _load_banned_seeds(path=BANNED_SEEDS_PATH):
+    seeds = set()
+    try:
+        with open(path, "r") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    seeds.add(int(line))
+                except ValueError:
+                    continue
+    except FileNotFoundError:
+        pass
+    return seeds
+
+
+def _append_banned_seed(seed, path=BANNED_SEEDS_PATH):
+    try:
+        with open(path, "a") as f:
+            f.write(f"{int(seed)}\n")
+    except Exception:
+        pass
+
+
+def generate_maze(use_classic=True, width=20, height=21,
+                  algorithm="recursive_backtracking", seed=None,
+                  validate=True, max_attempts=100):
     if use_classic:
         return [row[:] for row in CLASSIC_MAZE]
 
-    if seed is not None:
-        random.seed(seed)
+    banned = _load_banned_seeds()
 
+    # Normalize dimensions to odd values
     if width % 2 == 0:
         width += 1
     if height % 2 == 0:
         height += 1
 
-    if algorithm == "recursive_backtracking":
-        return generate_recursive_backtracking(width, height)
-    elif algorithm == "prims":
-        return generate_prims(width, height)
-    elif algorithm == "random_walk":
-        return generate_random_walk(width, height)
-    else:
-        return generate_recursive_backtracking(width, height)
+    # Helper to actually build a maze grid with a given seed
+    def _build_with_seed(s):
+        if s is not None:
+            random.seed(s)
+        if algorithm == "recursive_backtracking":
+            return generate_recursive_backtracking(width, height)
+        elif algorithm == "prims":
+            return generate_prims(width, height)
+        elif algorithm == "random_walk":
+            return generate_random_walk(width, height)
+        else:
+            return generate_recursive_backtracking(width, height)
+
+    # No validation requested: preserve original behavior
+    if not validate:
+        if seed is not None:
+            random.seed(seed)
+        if algorithm == "recursive_backtracking":
+            return generate_recursive_backtracking(width, height)
+        elif algorithm == "prims":
+            return generate_prims(width, height)
+        elif algorithm == "random_walk":
+            return generate_random_walk(width, height)
+        else:
+            return generate_recursive_backtracking(width, height)
+
+    # Validation path: try up to max_attempts for a valid seed, but never raise
+    attempts = 0
+    current_seed = seed
+
+    while attempts < max_attempts:
+        attempts += 1
+
+        # If caller gave a specific seed:
+        if attempts == 1 and seed is not None:
+            # Use it even if banned, so we can confirm and log if still invalid
+            current_seed = seed
+        else:
+            # For subsequent attempts or when no seed provided, draw a fresh seed
+            current_seed = (current_seed + 1) % (2 ** 31 - 1)
+            if current_seed in banned:
+                continue
+
+        # Build maze grid
+        raw_maze = _build_with_seed(current_seed)
+
+        # Wrap in a light-weight object so validate_maze_connectivity can use width/height/maze and cage info
+        class _TempMaze:
+            def __init__(self, grid):
+                self.maze = grid
+                self.height = len(grid)
+                self.width = len(grid[0]) if self.height > 0 else 0
+                # Reuse ghost cage bounds stamped by create_ghost_cage
+                from Code.MazeGenerator import create_ghost_cage
+                bounds = create_ghost_cage.last_bounds
+                if bounds:
+                    cl, ct, cr, cb, dx, dy = bounds
+                    self.cage_left = cl
+                    self.cage_top = ct
+                    self.cage_right = cr
+                    self.cage_bottom = cb
+                    self.door_x = dx
+                    self.door_y = dy
+                else:
+                    self.cage_left = self.width // 2 - 3
+                    self.cage_top = self.height // 2 - 1
+                    self.cage_right = self.width // 2 + 3
+                    self.cage_bottom = self.height // 2 + 1
+                    self.door_x = self.width // 2
+                    self.door_y = self.cage_top
+
+        temp_maze = _TempMaze(raw_maze)
+
+        if validate_maze_connectivity(temp_maze):
+            # If the original explicit seed turned out valid, great.
+            # If we had to resample, current_seed is the good seed we ended up with.
+            return raw_maze
+
+        # Seed produced an invalid layout — log and continue silently
+        if current_seed not in banned:
+            print(f"[MazeValidator] Banning invalid maze seed: {current_seed}")
+            _append_banned_seed(current_seed)
+            banned.add(current_seed)
+
+    # As a last resort, fall back to classic maze
+    print("[MazeValidator] Max attempts reached; falling back to CLASSIC_MAZE.")
+    return [row[:] for row in CLASSIC_MAZE]
 
 
 # ---------------------------------------------------------------------------
