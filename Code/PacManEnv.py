@@ -39,6 +39,7 @@ The episode only ends on game-over or truncation.
 
 import sys
 import os
+import torch
 
 # Make sure sibling modules (GameEngine etc.) are importable when this file
 # is run directly from inside the Code/ folder.
@@ -552,3 +553,6 @@ if __name__ == "__main__":
     print(f"  Different seeds give different obs: {different}")
 
     print("\nSmoke-test passed ✓")
+
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    print(f"Using device: {device}")

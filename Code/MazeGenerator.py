@@ -1,30 +1,6 @@
 import random
 from Code.Pathfinding import validate_maze_connectivity
 
-# Maze layout: 0 = path, 1 = wall
-CLASSIC_MAZE = [
-    [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
-    [1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1],
-    [1, 0, 1, 1, 0, 1, 1, 1, 0, 1, 1, 0, 1, 1, 1, 0, 1, 1, 0, 1],
-    [1, 0, 1, 1, 0, 1, 1, 1, 0, 1, 1, 0, 1, 1, 1, 0, 1, 1, 0, 1],
-    [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
-    [1, 0, 1, 1, 0, 1, 0, 1, 1, 1, 1, 1, 1, 0, 1, 0, 1, 1, 0, 1],
-    [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1],
-    [1, 1, 1, 1, 0, 1, 1, 1, 1, 0, 0, 1, 1, 1, 1, 0, 1, 1, 1, 1],
-    [1, 1, 1, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 1, 1, 1, 1],
-    [1, 1, 1, 1, 0, 1, 0, 1, 1, 1, 1, 1, 1, 0, 1, 0, 1, 1, 1, 1],
-    [0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-    [1, 1, 1, 1, 0, 1, 0, 1, 1, 1, 1, 1, 1, 0, 1, 0, 1, 1, 1, 1],
-    [1, 1, 1, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 1, 1, 1, 1],
-    [1, 1, 1, 1, 0, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1],
-    [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
-    [1, 0, 1, 1, 0, 1, 1, 1, 0, 1, 1, 0, 1, 1, 1, 0, 1, 1, 0, 1],
-    [1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 1],
-    [1, 1, 0, 1, 0, 1, 0, 1, 1, 1, 1, 1, 1, 0, 1, 0, 1, 0, 1, 1],
-    [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1],
-    [1, 0, 1, 1, 1, 1, 1, 1, 0, 1, 1, 0, 1, 1, 1, 1, 1, 1, 0, 1],
-    [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
-]
 
 BANNED_SEEDS_PATH = "C:/Users/fahee/Desktop/Coding/Pac Man Synoptic Project/Code/banned_seeds"
 
@@ -54,11 +30,9 @@ def _append_banned_seed(seed, path=BANNED_SEEDS_PATH):
         pass
 
 
-def generate_maze(use_classic=True, width=20, height=21,
+def generate_maze(width=20, height=21,
                   algorithm="recursive_backtracking", seed=None,
                   validate=True, max_attempts=100):
-    if use_classic:
-        return [row[:] for row in CLASSIC_MAZE]
 
     banned = _load_banned_seeds()
 
@@ -152,9 +126,9 @@ def generate_maze(use_classic=True, width=20, height=21,
             _append_banned_seed(current_seed)
             banned.add(current_seed)
 
-    # As a last resort, fall back to classic maze
-    print("[MazeValidator] Max attempts reached; falling back to CLASSIC_MAZE.")
-    return [row[:] for row in CLASSIC_MAZE]
+    # As a last resort, fall back to a fresh unvalidated maze
+    print("[MazeValidator] Max attempts reached; returning best-effort maze.")
+    return _build_with_seed(random.randint(0, 2**31 - 1))
 
 
 # ---------------------------------------------------------------------------

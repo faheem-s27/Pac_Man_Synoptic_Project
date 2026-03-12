@@ -3,7 +3,6 @@
   "tile_size": 40,
   "pacman_speed": 3,
   "ghost_speed": 2,
-  "use_classic_maze": false,
   "maze_algorithm": "recursive_backtracking",
   "maze_seed": 22459265,
   "enable_ghosts": false,

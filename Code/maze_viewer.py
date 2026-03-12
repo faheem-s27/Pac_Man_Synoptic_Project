@@ -17,10 +17,10 @@ INKY_CYAN = (0, 255, 255)
 CLYDE_ORANGE = (255, 184, 82)
 
 
-def _build_maze_grid_from_seed(tile_size, width, height, use_classic, algorithm, seed):
+def _build_maze_grid_from_seed(tile_size, width, height, algorithm, seed):
     """Helper to construct a Maze and return its underlying grid for comparison."""
     m = Maze(tile_size=tile_size, width=width, height=height,
-             use_classic=use_classic, algorithm=algorithm, seed=seed)
+             algorithm=algorithm, seed=seed)
     return m, [row[:] for row in m.maze]
 
 
@@ -56,8 +56,8 @@ def _get_spawn_and_corners(maze):
     return (spawn_gx, spawn_gy), corners
 
 
-def run_viewer(seed=None, use_classic=False, algorithm="recursive_backtracking", tile_size=40,
-               show_pellets=True, show_power_pellets=True, window_resolution="800x800"):
+def run_viewer(seed=None, algorithm="recursive_backtracking", tile_size=40,
+               show_pellets=True, show_power_pellets=True):
     pygame.init()
 
     # Base maze used for rendering
@@ -65,25 +65,22 @@ def run_viewer(seed=None, use_classic=False, algorithm="recursive_backtracking",
         tile_size=tile_size,
         width=20,
         height=21,
-        use_classic=use_classic,
         algorithm=algorithm,
         seed=seed,
     )
 
-    # Determine seed validity using the same grid-comparison heuristic
+    # Determine seed validity
     seed_status = "N/A"
-    if seed is not None and not use_classic:
+    if seed is not None:
         try:
             _, test_grid = _build_maze_grid_from_seed(
                 tile_size=tile_size,
                 width=20,
                 height=21,
-                use_classic=use_classic,
                 algorithm=algorithm,
                 seed=seed,
             )
             if base_grid == test_grid:
-                # Additionally, double-check with validate_maze_connectivity
                 seed_status = "VALID" if validate_maze_connectivity(maze) else "INVALID (no full corner reach)"
             else:
                 seed_status = "INPUT SEED BANNED → viewer showing resampled layout"
@@ -207,7 +204,6 @@ def run_viewer(seed=None, use_classic=False, algorithm="recursive_backtracking",
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Standalone maze viewer for inspecting generated layouts/seeds.")
     parser.add_argument("--seed", type=int, default=22459265, help="Maze seed to visualize.")
-    parser.add_argument("--use-classic", action="store_true", help="Use classic static maze instead of generator.")
     parser.add_argument("--algorithm", type=str, default="recursive_backtracking",
                         choices=["recursive_backtracking", "prims", "random_walk"],
                         help="Maze generation algorithm.")
@@ -219,7 +215,6 @@ if __name__ == "__main__":
 
     run_viewer(
         seed=args.seed,
-        use_classic=args.use_classic,
         algorithm=args.algorithm,
         tile_size=args.tile_size,
         show_pellets=not args.no_pellets,

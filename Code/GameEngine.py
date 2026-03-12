@@ -22,7 +22,7 @@ class GameState(Enum):
 
 class GameEngine:
     def __init__(self, screen_width=800, screen_height=800, pacman_speed=2, ghost_speed=-1,
-                 paused=False, use_classic_maze=True,
+                 paused=False,
                  maze_algorithm="recursive_backtracking",
                  enable_ghosts=True, tile_size=40, lives=3,
                  window_resolution="800x800",
@@ -33,7 +33,7 @@ class GameEngine:
                  maze_seed=None,
                  enable_sound=True,
                  enable_power_pellets=True,
-                 active_ghost_count=4,  # <-- NEW: Defaults to full difficulty
+                 active_ghost_count=4,
                  **kwargs):
         # Parse resolution string if provided
         if isinstance(window_resolution, str):
@@ -80,11 +80,10 @@ class GameEngine:
         if maze_width % 2 == 0: maze_width -= 1
         if maze_height % 2 == 0: maze_height -= 1
 
-        self.use_classic_maze = use_classic_maze
         self.maze_algorithm = maze_algorithm
         self.maze_seed = maze_seed
         self.maze = Maze(self.tile_size, width=maze_width, height=maze_height,
-                         use_classic=use_classic_maze, algorithm=maze_algorithm, seed=maze_seed)
+                         algorithm=maze_algorithm, seed=maze_seed)
 
         pacman_x, pacman_y = self._find_safe_spawn_bottom_center()
         self.pacman = PacMan(pacman_x, pacman_y, self.tile_size, speed=pacman_speed)
@@ -186,7 +185,7 @@ class GameEngine:
 
         # Regenerate maze — use the stored seed so the layout stays constant across levels
         self.maze = Maze(self.tile_size, width=self.maze.width, height=self.maze.height,
-                         use_classic=self.use_classic_maze, algorithm=self.maze_algorithm, seed=self.maze_seed)
+                         algorithm=self.maze_algorithm, seed=self.maze_seed)
         self.pellets = self._initialize_pellets()
         self.power_pellets = self._initialize_power_pellets() if self.enable_power_pellets else []
 

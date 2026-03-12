@@ -11,7 +11,6 @@ class Settings:
         "tile_size": 20,
         "pacman_speed": 2,
         "ghost_speed": -1,
-        "use_classic_maze": False,
         "maze_algorithm": "recursive_backtracking",
         "enable_ghosts": True,
         "lives": 3,
