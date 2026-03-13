@@ -494,20 +494,7 @@ class GameEngine:
             elif event.key == pygame.K_p: self.show_path = not self.show_path
 
     def update(self):
-        # Handle life lost timer and state transitions
-        if self.game_state == GameState.AUDIO_PLAYING:
-            self.life_lost_timer += 1
-            if self.life_lost_timer >= self.life_lost_duration:
-                # Transition back to GAME state
-                if self.lives > 0:
-                    self.game_state = GameState.GAME
-                    self.life_lost_timer = 0
-                else:
-                    # No more lives, game over
-                    self.game_over = True
-                    self.game_state = GameState.GAME_OVER
-            return
-
+        # If game is over, won, or paused, don't update gameplay
         if self.game_over or self.won or self.paused:
             return
 
@@ -659,17 +646,16 @@ class GameEngine:
                     # Ghost catches Pac-Man - lose a life
                     self.lives -= 1
 
-                    # Play death sound
+                    # Optionally play death sound (non-blocking, game continues immediately)
                     if self.death_sound and self.death_channel:
                         self.death_channel.play(self.death_sound)
 
                     if self.lives <= 0:
+                        # No more lives, end the game immediately
                         self.game_over = True
                         self.game_state = GameState.GAME_OVER
                     else:
-                        # Enter AUDIO_PLAYING state for 3 seconds
-                        self.game_state = GameState.AUDIO_PLAYING
-                        self.life_lost_timer = 0
+                        # Immediately reset positions with no special audio-only state
                         self._reset_positions()
 
                         # Reset frightened mode when life is lost

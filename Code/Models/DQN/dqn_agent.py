@@ -1,0 +1,122 @@
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import torch.optim as optim
+import numpy as np
+import random
+from collections import deque
+
+class QNetwork(nn.Module):
+    def __init__(self, input_dim=24, output_dim=4):
+        super(QNetwork, self).__init__()
+        # Dense FeedForward layers optimized for the 16-element matrix
+        self.fc1 = nn.Linear(input_dim, 64)
+        self.fc2 = nn.Linear(64, 64)
+        self.fc3 = nn.Linear(64, output_dim)
+
+    def forward(self, state):
+        x = F.relu(self.fc1(state))
+        x = F.relu(self.fc2(x))
+        # Raw linear output representing the Q-value for UP, DOWN, LEFT, RIGHT
+        return self.fc3(x)
+
+
+class ReplayBuffer:
+    def __init__(self, capacity=100_000):
+        self.buffer = deque(maxlen=capacity)
+
+    def push(self, state, action, reward, next_state, done):
+        # Stores the atomic transition tuple
+        self.buffer.append((state, action, reward, next_state, done))
+
+    def sample(self, batch_size):
+        # Uniform random sampling to break temporal correlation
+        batch = random.sample(self.buffer, batch_size)
+        states, actions, rewards, next_states, dones = zip(*batch)
+
+        return (
+            np.array(states, dtype=np.float32),
+            np.array(actions, dtype=np.int64),
+            np.array(rewards, dtype=np.float32),
+            np.array(next_states, dtype=np.float32),
+            np.array(dones, dtype=np.bool_)
+        )
+
+    def __len__(self):
+        return len(self.buffer)
+
+class DQNAgent:
+    def __init__(self, input_dim=24, output_dim=4, lr=1e-4, gamma=0.99, epsilon_start=1.0, epsilon_end=0.05, epsilon_decay=100_000):
+        self.action_dim = output_dim
+        self.gamma = gamma
+        self.epsilon = epsilon_start
+        self.epsilon_end = epsilon_end
+        self.epsilon_decay = epsilon_decay
+        self.step_count = 0
+
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+        # Dual-Network Architecture
+        self.policy_net = QNetwork(input_dim, output_dim).to(self.device)
+        self.target_net = QNetwork(input_dim, output_dim).to(self.device)
+        self.target_net.load_state_dict(self.policy_net.state_dict())
+        self.target_net.eval() # Target network is frozen
+
+        self.optimizer = optim.Adam(self.policy_net.parameters(), lr=lr)
+        self.memory = ReplayBuffer()
+
+    def select_action(self, state):
+        self.step_count += 1
+        # Decay epsilon for the exploration/exploitation trade-off
+        self.epsilon = max(self.epsilon_end, self.epsilon - (1.0 / self.epsilon_decay))
+
+        # Exploration: Random action
+        if random.random() < self.epsilon:
+            return random.randrange(self.action_dim)
+
+        # Exploitation: Highest predicted Q-value
+        with torch.no_grad():
+            state_tensor = torch.FloatTensor(state).unsqueeze(0).to(self.device)
+            q_values = self.policy_net(state_tensor)
+            return q_values.argmax(dim=1).item()
+
+    def optimize_model(self, batch_size=64):
+        # Do not train if the buffer lacks sufficient atomic transitions
+        if len(self.memory) < batch_size:
+            return None
+
+        # ACTION: Sample a diverse, uncorrelated batch from memory
+        state_batch, action_batch, reward_batch, next_state_batch, done_batch = self.memory.sample(batch_size)
+
+        # Transfer arrays to the RTX 4060
+        state_tensor = torch.FloatTensor(state_batch).to(self.device)
+        action_tensor = torch.LongTensor(action_batch).unsqueeze(1).to(self.device)
+        reward_tensor = torch.FloatTensor(reward_batch).to(self.device)
+        next_state_tensor = torch.FloatTensor(next_state_batch).to(self.device)
+        done_tensor = torch.FloatTensor(done_batch).to(self.device)
+
+        # 1. Compute current Q-values from the Policy Network
+        # gather(1, action_tensor) extracts the specific Q-value for the action actually taken
+        current_q_values = self.policy_net(state_tensor).gather(1, action_tensor).squeeze(1)
+
+        # 2. Compute the optimal future Q-values from the frozen Target Network
+        with torch.no_grad():
+            max_next_q_values = self.target_net(next_state_tensor).max(1)[0]
+            # If the state is terminal (done), the future reward is 0
+            expected_q_values = reward_tensor + (self.gamma * max_next_q_values * (1 - done_tensor))
+
+        # 3. Compute Mean Squared Error Loss
+        loss = F.mse_loss(current_q_values, expected_q_values)
+
+        # 4. Backpropagation (Gradient Descent)
+        self.optimizer.zero_grad()
+        loss.backward()
+        # Gradient clipping prevents the loss from exploding mathematically
+        torch.nn.utils.clip_grad_value_(self.policy_net.parameters(), 100)
+        self.optimizer.step()
+
+        return loss.item()
+
+    def update_target_network(self):
+        # Synchronize the frozen target network with the active policy network
+        self.target_net.load_state_dict(self.policy_net.state_dict())

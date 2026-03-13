@@ -57,7 +57,6 @@ import pygame
 from Code.Settings import Settings
 from Code.GameEngine import GameEngine, GameState
 from Code.Ghost import GhostState
-from Code.Pathfinding import Pathfinding
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -134,6 +133,10 @@ class PacManEnv(gym.Env):
         self._pygame_initialised = False
         self._screen = None
         self._clock = None
+        # Canonical GameEngine instance; keep both public and private-style
+        # attributes for backwards compatibility with older scripts that may
+        # reference `env._engine` directly (e.g. visual DQN monitors).
+        self.engine = None
         self._engine = None
 
         self.action_space = spaces.Discrete(4)
@@ -143,15 +146,17 @@ class PacManEnv(gym.Env):
             w, h = self._parse_res(res_str)
             self.observation_space = spaces.Box(low=0, high=255, shape=(h, w, 3), dtype=np.uint8)
         else:
-            # New compact 16-element vector observation
-            self.observation_space = spaces.Box(low=-1.0, high=1.0, shape=(16,), dtype=np.float32)
+            # New expanded 24-element vector observation (5 Pellets)
+            self.observation_space = spaces.Box(low=-1.0, high=1.0, shape=(24,), dtype=np.float32)
 
         self._prev_score = 0
         self._prev_lives = 3
         self._won_already = False
         self._levels_completed = 0
 
+        self._last_pacman_pos = None
         self._stuck_frames = 0
+        self._recent_tiles = []
 
     # ── Lifecycle ─────────────────────────────────────────────────────────────
 
@@ -170,92 +175,107 @@ class PacManEnv(gym.Env):
 
         # Initialize Engine with merged config
         # GameEngine receives active_ghost_count via **kwargs if present in cfg
-        self._engine = GameEngine(**cfg)
+        self.engine = GameEngine(**cfg)
+        # Backwards-compatible alias: some external tools/scripts reference
+        # `env._engine` directly. Keep it in sync with the canonical `engine`.
+        self._engine = self.engine
 
-        self._engine.game_state = GameState.GAME
-        self._engine.paused = False
+        self.engine.game_state = GameState.GAME
+        self.engine.paused = False
 
         self._prev_score = 0
-        self._prev_lives = self._engine.lives
+        self._prev_lives = self.engine.lives
         self._won_already = False
         self._step_count = 0
         self._levels_completed = 0
 
+        # Reset last_action tracking used in step() for reversal penalties
         self._last_action = None
+        self._last_pacman_pos = None
         self._stuck_frames = 0
+        self._recent_tiles = []
 
         # Return first observation
         return self._get_obs(), {}
 
     def step(self, action: int):
-        new_direction = self._ACTION_MAP[int(action)]
-        current_direction = self._engine.pacman.direction
+        # 1. Base step penalty (scaled slightly for the +10 pellet economy)
+        reward = -0.1
 
-        # ACTION: The Intent Buffer
-        # If the AI wants to turn, check if the turn is valid.
-        if new_direction != current_direction:
-            # We use next_direction to queue the turn. The GameEngine will execute
-            # it when the grid alignment allows, preventing sub-pixel wall snags.
-            self._engine.pacman.next_direction = new_direction
+        # 2. ACTION: Proactive Wall Collider Scorer
+        # Check the actual maze grid in the chosen direction BEFORE moving
+        ts = self.engine.tile_size
+        tx = int(self.engine.pacman.x / ts)
+        ty = int(self.engine.pacman.y / ts)
 
-            # If Pac-Man is currently stopped (e.g. at a dead end), try to force the move
-            if current_direction == (0, 0):
-                self._engine.pacman.set_direction(new_direction)
+        # Map action to grid deltas: 0:UP, 1:DOWN, 2:LEFT, 3:RIGHT
+        dx, dy = 0, 0
+        if action == 0:
+            dy = -1
+        elif action == 1:
+            dy = 1
+        elif action == 2:
+            dx = -1
+        elif action == 3:
+            dx = 1
 
-        # Step the engine
-        self._engine.update()
-        self._step_count += 1
+        nx, ny = tx + dx, ty + dy
 
-        # Reward logic
-        reward = -0.01  # Step penalty
+        # If the chosen tile is out of bounds or is a solid wall
+        if not (0 <= nx < self.engine.maze.width and 0 <= ny < self.engine.maze.height) or self.engine.maze.maze[ny][
+            nx] == 1:
+            reward -= 5.0  # Massive tax for ignoring the wall sensors
 
-        # ACTION: Apply the 180-degree Reversal Penalty
+        # 3. The 180-degree Reversal Penalty (Scaled up to combat hyperinflation)
         if self._last_action is not None:
-            # Reversal pairs: 0-1 (UP-DOWN), 2-3 (LEFT-RIGHT)
             is_reversal = False
-            if self._last_action == 0 and action == 1: is_reversal = True  # UP to DOWN
-            if self._last_action == 1 and action == 0: is_reversal = True  # DOWN to UP
-            if self._last_action == 2 and action == 3: is_reversal = True  # LEFT to RIGHT
-            if self._last_action == 3 and action == 2: is_reversal = True  # RIGHT to LEFT
+            if self._last_action == 0 and action == 1: is_reversal = True
+            if self._last_action == 1 and action == 0: is_reversal = True
+            if self._last_action == 2 and action == 3: is_reversal = True
+            if self._last_action == 3 and action == 2: is_reversal = True
 
             if is_reversal:
-                reward -= 2.0  # Significant tax on vibrating behavior
-
-        # Update the action memory for the next frame
+                pass
+                #reward -= 10.0  # Cancel out an entire pellet's worth of points
+        
         self._last_action = action
 
-        # If Pac-Man is stationary (hit a wall and didn't provide a valid turn)
-        if self._engine.pacman.direction == (0, 0):
-            self._stuck_frames += 1
-        else:
-            self._stuck_frames = 0  # Reset immediately upon moving
+        # 4. Step the engine (Physics take over here)
+        self.engine.pacman.next_direction = self.engine.pacman.direction  # Ensure engine state aligns
+        if action == 0:
+            self.engine.pacman.next_direction = (0, -1)
+        elif action == 1:
+            self.engine.pacman.next_direction = (0, 1)
+        elif action == 2:
+            self.engine.pacman.next_direction = (-1, 0)
+        elif action == 3:
+            self.engine.pacman.next_direction = (1, 0)
 
-        # If stuck for 30 consecutive frames, kill it
-        if self._stuck_frames >= 30:
-            reward -= 50.0
-            self._engine.game_over = True
+        self.engine.update()
+        self._step_count += 1
 
-        score_delta = self._engine.pacman.score - self._prev_score
+        # 5. Score delta logic (Your raw +10.0 implementation)
+        score_delta = self.engine.pacman.score - self._prev_score
         if score_delta > 0:
-            reward += float(score_delta) / 2.0
-        self._prev_score = self._engine.pacman.score
+            reward += float(score_delta)
+        self._prev_score = self.engine.pacman.score
 
-        if self._engine.lives < self._prev_lives:
+        if self.engine.lives < self._prev_lives:
             reward -= 50.0
-            self._prev_lives = self._engine.lives
+            self._prev_lives = self.engine.lives
 
-        if self._engine.won and not self._won_already:
-            reward += 100.0  # High win bonus
+        if self.engine.won and not self._won_already:
+            reward += 10000.0  # High win bonus
             self._won_already = True
             self._levels_completed += 1
             # ACTION: Infinite loop amputated. We DO NOT call next_level() here.
 
         # ACTION: Terminate episode immediately if Pac-Man dies OR wins
-        terminated = self._engine.game_over or self._engine.won
+        terminated = self.engine.game_over or self.engine.won
         truncated = (self._step_count >= self.max_episode_steps)
 
         # ACTION: Apply death penalty strictly upon death (not winning)
-        if self._engine.game_over:
+        if self.engine.game_over:
             reward -= 50.0
 
         if self.render_mode == "human": self._render_human()
@@ -263,7 +283,7 @@ class PacManEnv(gym.Env):
 
     def render(self):
         """Gymnasium render() — returns an RGB array or renders to screen."""
-        if self._engine is None:
+        if self.engine is None:
             return None
 
         if self.render_mode == "human":
@@ -313,11 +333,11 @@ class PacManEnv(gym.Env):
         self._pygame_initialised = True
 
     def _draw_debug_sensors(self):
-        """Visualizes the current 16-element observation (Pure Euclidean straight-lines)."""
-        if self._screen is None or self._engine is None:
+        """Visualizes the current 16-element observation (Euclidean lines + Raycast walls)."""
+        if self._screen is None or self.engine is None:
             return
 
-        eng = self._engine
+        eng = self.engine
         ts = eng.tile_size
 
         # Pac-Man center (anchor for all sensors)
@@ -325,7 +345,7 @@ class PacManEnv(gym.Env):
         pac_cy = int(eng.pacman.y + (ts / 2))
         pac_center = (pac_cx, pac_cy)
 
-        # ----- Ghost sensors (Euclidean) -----
+        # ----- Ghost sensors (Euclidean, Red/Orange lines) -----
         active_ghosts = []
         for g in eng.ghosts:
             if g.state in (GhostState.EATEN, GhostState.SPAWNING):
@@ -344,7 +364,7 @@ class PacManEnv(gym.Env):
             _, g_cx, g_cy = active_ghosts[idx]
             pygame.draw.line(self._screen, ghost_colors[idx], pac_center, (int(g_cx), int(g_cy)), 2)
 
-        # ----- Nearest normal pellet (Euclidean, Green) -----
+        # ----- Nearest 5 normal pellets (Euclidean, Green fading lines) -----
         if eng.pellets:
             dists = []
             for px, py in eng.pellets:
@@ -352,10 +372,15 @@ class PacManEnv(gym.Env):
                 dy = py - pac_cy
                 dists.append((dx * dx + dy * dy, px, py))
             dists.sort(key=lambda t: t[0])
-            _, nearest_px, nearest_py = dists[0]
-            pygame.draw.line(self._screen, (0, 255, 0), pac_center, (int(nearest_px), int(nearest_py)), 2)
 
-        # ----- Nearest power pellet (Euclidean, Blue) -----
+            # Draw lines to the 5 closest, fading the green color based on distance priority
+            for k in range(min(5, len(dists))):
+                _, px, py = dists[k]
+                # Darken the green for pellets further down the list
+                color_intensity = max(50, 255 - (k * 40))
+                pygame.draw.line(self._screen, (0, color_intensity, 0), pac_center, (int(px), int(py)), 2)
+
+        # ----- Nearest power pellet (Euclidean, Blue line) -----
         if eng.power_pellets:
             dists = []
             for px, py in eng.power_pellets:
@@ -366,16 +391,54 @@ class PacManEnv(gym.Env):
             _, nearest_px, nearest_py = dists[0]
             pygame.draw.line(self._screen, (0, 128, 255), pac_center, (int(nearest_px), int(nearest_py)), 2)
 
-        # ----- Wall sensors (Strictly local, Yellow circles) -----
-        for dx, dy in [(0, -ts), (0, ts), (-ts, 0), (ts, 0)]:
-            sensor_px = (pac_cx + dx, pac_cy + dy)
-            tx, ty = int(sensor_px[0] / ts), int(sensor_px[1] / ts)
-            if not (0 <= tx < eng.maze.width and 0 <= ty < eng.maze.height) or eng.maze.maze[ty][tx] == 1:
-                pygame.draw.circle(self._screen, (255, 255, 0), sensor_px, 5, 1)
+        # ----- Raycast Wall Depth Sensors (UP, DOWN, LEFT, RIGHT) -----
+        # This mirrors the continuous inverse distance logic in _get_vector_obs
+
+        # Grid coordinates for current location
+        tx = int(pac_cx / ts)
+        ty = int(pac_cy / ts)
+
+        # Color and radius for end points
+        # Using cyan for distinct depth visualization
+        depth_color = (0, 255, 255)
+
+        for dx, dy in [(0, -1), (0, 1), (-1, 0), (1, 0)]:
+            dist = 0
+            curr_x, curr_y = tx, ty
+
+            # Start and end points for the visual line
+            # Start at Pac-Man's center
+
+            # Use raycast logic to find wall distance
+            while True:
+                curr_x += dx
+                curr_y += dy
+                dist += 1
+
+                # Check bounds
+                if not (0 <= curr_x < eng.maze.width and 0 <= curr_y < eng.maze.height):
+                    break
+
+                # Check for solid wall
+                if eng.maze.maze[curr_y][curr_x] == 1:
+                    break
+
+            # Calculate the end point in screen coordinates (pixels)
+            # Wall hit point is (curr_x, curr_y) in grid space
+            # Convert to center of wall tile
+            hit_cx = (curr_x * ts) + (ts / 2)
+            hit_cy = (curr_y * ts) + (ts / 2)
+            wall_hit_px = (int(hit_cx), int(hit_cy))
+
+            # Draw line from Pac-Man to the wall hit point
+            pygame.draw.line(self._screen, depth_color, pac_center, wall_hit_px, 1)
+            # Draw small circle at wall hit point for clarity
+            pygame.draw.circle(self._screen, depth_color, wall_hit_px, 4, 1)
+
 
     def _render_human(self):
         """Draw one frame to the visible window and pump events."""
-        if self._screen is None or self._engine is None:
+        if self._screen is None or self.engine is None:
             return
 
         for event in pygame.event.get():
@@ -384,7 +447,7 @@ class PacManEnv(gym.Env):
                 raise SystemExit
 
         self._screen.fill((0, 0, 0))
-        self._engine.draw(self._screen)
+        self.engine.draw(self._screen)
 
         # Active overlay
         self._draw_debug_sensors()
@@ -399,7 +462,7 @@ class PacManEnv(gym.Env):
             return np.zeros((h, w, 3), dtype=np.uint8)
         surf = self._screen
         surf.fill((0, 0, 0))
-        self._engine.draw(surf)
+        self.engine.draw(surf)
         arr = pygame.surfarray.array3d(surf)
         return np.transpose(arr, (1, 0, 2))
 
@@ -410,7 +473,7 @@ class PacManEnv(gym.Env):
 
     def _get_vector_obs(self) -> np.ndarray:
         """Return the 16-element dense Euclidean observation vector."""
-        eng = self._engine
+        eng = self.engine
         ts = eng.tile_size
         mw_px, mh_px = eng.maze.width * ts, eng.maze.height * ts
 
@@ -457,8 +520,8 @@ class PacManEnv(gym.Env):
             else:
                 obs.extend([0.0, 0.0, 0.0])
 
-        # 3) Nearest normal pellet (Pure Euclidean)
-        pellet_rel = [0.0, 0.0]
+        # 3) Nearest 5 normal pellets (Pure Euclidean Vector Field)
+        pellet_rels = []
         if eng.pellets:
             dists = []
             for px, py in eng.pellets:
@@ -466,22 +529,46 @@ class PacManEnv(gym.Env):
                 dy = py - pac_cy
                 dists.append((dx * dx + dy * dy, px, py))
             dists.sort(key=lambda t: t[0])
-            _, px, py = dists[0]
-            pellet_rel = [(px - pac_cx) / mw_px, (py - pac_cy) / mh_px]
-        # [8-9]
-        obs.extend(pellet_rel)
 
-        # 4) Wall sensors: up, down, left, right (Strictly Local)
+            # Grab up to the 5 closest pellets
+            for k in range(min(5, len(dists))):
+                _, px, py = dists[k]
+                pellet_rels.extend([(px - pac_cx) / mw_px, (py - pac_cy) / mh_px])
+
+        # Mathematical padding: If fewer than 5 pellets remain, fill the rest of the tensor with 0.0
+        while len(pellet_rels) < 10:  # 5 pellets * 2 coordinates = 10 floats
+            pellet_rels.extend([0.0, 0.0])
+
+        # [8-17]
+        obs.extend(pellet_rels)
+
+        # 4) Raycast Depth Sensors: up, down, left, right (Inverse Distance)
         tx = int(pac_cx / ts)
         ty = int(pac_cy / ts)
         wall_vals: list[float] = []
+
         for dx, dy in [(0, -1), (0, 1), (-1, 0), (1, 0)]:
-            nx, ny = tx + dx, ty + dy
-            if not (0 <= nx < eng.maze.width and 0 <= ny < eng.maze.height):
-                wall_vals.append(1.0)
-            else:
-                wall_vals.append(1.0 if eng.maze.maze[ny][nx] == 1 else 0.0)
-        # [10-13]
+            dist = 0
+            curr_x, curr_y = tx, ty
+
+            while True:
+                curr_x += dx
+                curr_y += dy
+                dist += 1
+
+                # If raycast goes out of bounds, treat as immediate wall
+                if not (0 <= curr_x < eng.maze.width and 0 <= curr_y < eng.maze.height):
+                    break
+
+                # If raycast hits a wall block
+                if eng.maze.maze[curr_y][curr_x] == 1:
+                    break
+
+            # Inverse distance: 1.0 = Wall is touching us. 0.1 = Wall is 10 tiles away.
+            # This cleanly maps continuous depth to the neural network's 0.0 - 1.0 expectation.
+            wall_vals.append(1.0 / float(dist))
+
+        # [18-21]
         obs.extend(wall_vals)
 
         # 5) Nearest power pellet (Pure Euclidean)
@@ -495,24 +582,24 @@ class PacManEnv(gym.Env):
             dists.sort(key=lambda t: t[0])
             _, px, py = dists[0]
             pp_rel = [(px - pac_cx) / mw_px, (py - pac_cy) / mh_px]
-        # [14-15]
+        # [22-23]
         obs.extend(pp_rel)
 
         return np.array(obs, dtype=np.float32)
 
     def _get_info(self) -> dict:
-        if self._engine is None:
+        if self.engine is None:
             return {}
         return {
-            "score":            self._engine.pacman.score,
-            "lives":            self._engine.lives,
-            "level":            self._engine.level,
+            "score":            self.engine.pacman.score,
+            "lives":            self.engine.lives,
+            "level":            self.engine.level,
             "levels_completed": self._levels_completed,
-            "pellets_eaten":    self._engine.pellets_eaten_this_level,
-            "pellets_left":     len(self._engine.pellets) + len(self._engine.power_pellets),
-            "frightened":       self._engine.frightened_mode,
-            "game_over":        self._engine.game_over,
-            "won":              self._engine.won,
+            "pellets_eaten":    self.engine.pellets_eaten_this_level,
+            "pellets_left": len(self.engine.pellets) + len(self.engine.power_pellets),
+            "frightened":       self.engine.frightened_mode,
+            "game_over":        self.engine.game_over,
+            "won":              self.engine.won,
         }
 
     @staticmethod

@@ -4,7 +4,7 @@
   "pacman_speed": 3,
   "ghost_speed": 2,
   "maze_algorithm": "recursive_backtracking",
-  "maze_seed": 22459265,
+  "maze_seed": "",
   "enable_ghosts": false,
   "enable_sound": false,
   "lives": 3,

@@ -43,7 +43,7 @@ CURRICULUM = CurriculumManager()
 # ── Config ───────────────────────────────────────────────────────────────────
 # We define a static evaluation suite to ensure fair comparison across generations
 MAX_STEPS        = 2000          # Increased to allow for multi-level survival
-NUM_GENERATIONS  = 400
+NUM_GENERATIONS  = 500
 CHECKPOINT_DIR   = os.path.join(_HERE, "checkpoints")
 CONFIG_PATH      = os.path.join(_HERE, "neat_config.cfg") # Matched your previous filename
 PARALLEL         = True
@@ -158,7 +158,7 @@ def eval_genome(genome, config):
             maze_seed=seed,
             maze_algorithm="recursive_backtracking",
             settings=CURRENT_SETTINGS,  # <-- New: Dynamic Curriculum Settings
-            max_episode_steps=CURRENT_SETTINGS.get('max_episode_steps', 2000),
+            max_episode_steps=MAX_STEPS,
         )
 
         obs, _ = env.reset()
