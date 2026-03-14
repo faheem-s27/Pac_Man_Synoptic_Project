@@ -7,9 +7,9 @@ import random
 from collections import deque
 
 class QNetwork(nn.Module):
-    def __init__(self, input_dim=24, output_dim=4):
+    def __init__(self, input_dim=27, output_dim=3):
         super(QNetwork, self).__init__()
-        # Dense FeedForward layers optimized for the 16-element matrix
+        # Dense FeedForward layers optimized for the 27-element array (Raycasts + Compass + Fright State)
         self.fc1 = nn.Linear(input_dim, 64)
         self.fc2 = nn.Linear(64, 64)
         self.fc3 = nn.Linear(64, output_dim)
@@ -17,9 +17,8 @@ class QNetwork(nn.Module):
     def forward(self, state):
         x = F.relu(self.fc1(state))
         x = F.relu(self.fc2(x))
-        # Raw linear output representing the Q-value for UP, DOWN, LEFT, RIGHT
+        # Raw linear output representing the Q-value for FORWARD, LEFT, RIGHT
         return self.fc3(x)
-
 
 class ReplayBuffer:
     def __init__(self, capacity=100_000):
@@ -46,7 +45,7 @@ class ReplayBuffer:
         return len(self.buffer)
 
 class DQNAgent:
-    def __init__(self, input_dim=24, output_dim=4, lr=1e-4, gamma=0.99, epsilon_start=1.0, epsilon_end=0.05, epsilon_decay=100_000):
+    def __init__(self, input_dim=27, output_dim=3, lr=1e-4, gamma=0.99, epsilon_start=1.0, epsilon_end=0.05, epsilon_decay=100_000):
         self.action_dim = output_dim
         self.gamma = gamma
         self.epsilon = epsilon_start
@@ -65,20 +64,28 @@ class DQNAgent:
         self.optimizer = optim.Adam(self.policy_net.parameters(), lr=lr)
         self.memory = ReplayBuffer()
 
-    def select_action(self, state):
+    def select_action(self, state, valid_actions=None):
+        """Epsilon-greedy over the 3 relative actions (0=FORWARD,1=LEFT,2=RIGHT).
+
+        If valid_actions is provided and is a subset of {0,1,2}, it will be used
+        as the candidate set; otherwise, all three actions are considered.
+        """
         self.step_count += 1
-        # Decay epsilon for the exploration/exploitation trade-off
         self.epsilon = max(self.epsilon_end, self.epsilon - (1.0 / self.epsilon_decay))
 
-        # Exploration: Random action
-        if random.random() < self.epsilon:
-            return random.randrange(self.action_dim)
+        candidate_actions = valid_actions if valid_actions is not None and len(valid_actions) > 0 else list(range(self.action_dim))
 
-        # Exploitation: Highest predicted Q-value
+        if random.random() < self.epsilon:
+            return random.choice(candidate_actions)
+
         with torch.no_grad():
             state_tensor = torch.FloatTensor(state).unsqueeze(0).to(self.device)
-            q_values = self.policy_net(state_tensor)
-            return q_values.argmax(dim=1).item()
+            q_values = self.policy_net(state_tensor).squeeze(0)
+
+            masked_q = torch.full_like(q_values, float('-inf'))
+            for a in candidate_actions:
+                masked_q[a] = q_values[a]
+            return masked_q.argmax().item()
 
     def optimize_model(self, batch_size=64):
         # Do not train if the buffer lacks sufficient atomic transitions
