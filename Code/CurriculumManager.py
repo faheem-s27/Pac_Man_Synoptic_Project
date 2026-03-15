@@ -1,79 +1,104 @@
 import os
+import collections
 from Code.Settings import Settings
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _SETTINGS_PATH = os.path.join(_HERE, "game_settings.json")
 
 class CurriculumManager:
-    def __init__(self, settings_path: str = None, stage_duration: int = 250):
+    def __init__(self, settings_path: str = None):
         path = settings_path or _SETTINGS_PATH
         self.base_settings = Settings(path).get_all()
-        # Increased stage duration to give more time for weights to settle per difficulty
-        self.stage_duration = stage_duration
-        self.current_stage = -1
+        # Rolling window of recent episode outcomes (True = win, False = loss)
+        self.recent_results = collections.deque(maxlen=50)
+        self.current_stage = 0
 
-    def get_settings_for_generation(self, step_id: int):
+    def update_performance(self, won: bool):
+        """Record the outcome of a completed episode.
+
+        Call this after each episode with won=True if the agent cleared the level,
+        or won=False otherwise. This drives dynamic curriculum promotion.
+        """
+        self.recent_results.append(bool(won))
+
+    def check_promotion(self) -> bool:
+        """Check whether the agent should be promoted to the next stage.
+
+        Promotion rule:
+            - Once we have a full window of 50 results, compute
+              win_rate = sum(recent_results) / len(recent_results).
+            - If win_rate >= 0.80, clear the history, increment current_stage,
+              print a promotion message, and return True.
+            - Otherwise, return False.
+        """
+        if not self.recent_results:
+            return False
+
+        if len(self.recent_results) < self.recent_results.maxlen:
+            return False
+
+        win_rate = sum(self.recent_results) / len(self.recent_results)
+        if win_rate >= 0.80:
+            self.current_stage += 1
+            print(f"\n--- CURRICULUM PROMOTION: Stage {self.current_stage} (win_rate={win_rate:.2f}) ---")
+            self.recent_results.clear()
+            return True
+
+        return False
+
+    def get_settings(self):
+        """Return environment settings for the current curriculum stage.
+
+        Stages:
+            0: Rapid Foraging      — small pellet target, no ghosts
+            1: Map Mastery        — full clear, no ghosts
+            2: Evasion Bridge     — 1 ghost, partial pellet target
+            3: Hunting Context    — 2 ghosts, power pellets enabled
+            4+: The Gauntlet      — 4 ghosts, full clear with power pellets, long horizon
+        """
         settings = self.base_settings.copy()
-        stage = step_id // self.stage_duration
 
-        if stage != self.current_stage:
-            print(f"\n--- TOUGHENED CURRICULUM: Stage {stage} (Episode/Gen {step_id}) ---")
-            self.current_stage = stage
+        # Fallback: any stage > 4 uses Stage 4 configuration
+        stage = min(self.current_stage, 4)
 
-        # GLOBAL HARDCORE RULES: 1 Life only for training (forces perfection)
-        settings['lives'] = 1
-        settings['enable_power_pellets'] = False
-
-        # --- PHASE 1: RAPID FORAGING (No Ghosts) ---
         if stage == 0:
+            # Stage 0 — Rapid Foraging
             settings['enable_ghosts'] = False
             settings['pellets_to_win'] = 25
-            settings['max_episode_steps'] = 1500 # High ceiling to allow exploration
+            settings['lives'] = 1
+            settings['enable_power_pellets'] = False
 
         elif stage == 1:
+            # Stage 1 — Map Mastery (full clear)
             settings['enable_ghosts'] = False
-            settings['pellets_to_win'] = 75
-            settings['max_episode_steps'] = 2000
+            settings['pellets_to_win'] = -1  # full clear
+            settings['lives'] = 1
+            settings['enable_power_pellets'] = False
 
         elif stage == 2:
-            settings['enable_ghosts'] = False
-            settings['pellets_to_win'] = -1 # FULL CLEAR MANDATORY
-            settings['max_episode_steps'] = 3000
-
-        # --- PHASE 2: INTRODUCING LETHALITY (The Survival Test) ---
-        elif stage == 3:
+            # Stage 2 — Evasion Bridge
             settings['enable_ghosts'] = True
             settings['active_ghost_count'] = 1
-            settings['pellets_to_win'] = -1
-            settings['max_episode_steps'] = 3500
+            settings['pellets_to_win'] = 20
+            settings['lives'] = 3
+            settings['enable_power_pellets'] = False
 
-        elif stage == 4:
+        elif stage == 3:
+            # Stage 3 — Hunting Context
             settings['enable_ghosts'] = True
             settings['active_ghost_count'] = 2
-            settings['pellets_to_win'] = -1
-            settings['max_episode_steps'] = 4000
-
-        elif stage == 5:
-            settings['enable_ghosts'] = True
-            settings['active_ghost_count'] = 3
-            settings['pellets_to_win'] = -1
-            settings['max_episode_steps'] = 4500
-
-        # --- PHASE 3: FULL CONTEXT (The Hunt) ---
-        elif stage == 6:
-            settings['enable_ghosts'] = True
-            settings['active_ghost_count'] = 4
-            settings['pellets_to_win'] = -1
-            settings['max_episode_steps'] = 5000
-            settings['enable_power_pellets'] = True # Learn to use power pellets under max pressure
-
-        elif stage >= 7:
-            # THE GAUNTLET: 3 Lives restored but ghosts are at max aggression
-            settings['enable_ghosts'] = True
-            settings['active_ghost_count'] = 4
+            settings['pellets_to_win'] = 20
             settings['lives'] = 3
-            settings['pellets_to_win'] = -1
-            settings['max_episode_steps'] = 6000 # Maximum time for full strategic clears
             settings['enable_power_pellets'] = True
 
+        else:  # stage == 4 or higher
+            # Stage 4 — The Gauntlet (fallback for all higher stages)
+            settings['enable_ghosts'] = True
+            settings['active_ghost_count'] = 4
+            settings['pellets_to_win'] = -1
+            settings['lives'] = 3
+            settings['enable_power_pellets'] = True
+            settings['max_episode_steps'] = 6000
+
         return settings
+

@@ -2,7 +2,7 @@
 dqn_train_visual.py
 ===================
 A real-time monitor tailored for the Dense 11x11 Grid (122-input) Architecture.
-Features a fully colored, monospaced diagnostic matrix.
+Features a fully colored, monospaced diagnostic matrix and high-speed render throttling.
 """
 
 import sys
@@ -25,7 +25,7 @@ MAX_WINDOW_W = 800
 MAX_WINDOW_H = 800
 DASHBOARD_W  = 400
 INFO_BAR_H   = 60
-TARGET_FPS   = 120
+TARGET_FPS   = 0 # 0 uncaps the clock for maximum calculation speed
 SAVE_PATH    = os.path.join(_HERE, "dqn_pacman.pth")
 
 def map_value_to_char(val):
@@ -63,8 +63,8 @@ def run_visual_dqn():
     header_font = pygame.font.Font(None, 26)
     fps_clock = pygame.time.Clock()
 
-    curriculum = CurriculumManager(stage_duration=1000)
-    base_settings = curriculum.get_settings_for_generation(0)
+    curriculum = CurriculumManager()
+    base_settings = curriculum.get_settings()
 
     # ACTION: 122 inputs, 4 absolute outputs
     env = PacManEnv(render_mode=None, **base_settings)
@@ -83,7 +83,9 @@ def run_visual_dqn():
 
     while True:
         episode += 1
-        current_settings = curriculum.get_settings_for_generation(episode)
+
+        # Get current stage settings and randomize maze seed for diversity
+        current_settings = curriculum.get_settings()
         dynamic_seed = random.randint(0, 9999999)
         current_settings['maze_seed'] = dynamic_seed
 
@@ -103,9 +105,8 @@ def run_visual_dqn():
                     pygame.quit()
                     sys.exit()
 
-            # The environment handles collision now; pass all 4 absolute actions
+            # --- MATH & PHYSICS (Runs every tick) ---
             action = agent.select_action(state, valid_actions=[0, 1, 2, 3])
-
             next_state, reward, terminated, truncated, _ = env.step(action)
             done = terminated or truncated
 
@@ -115,70 +116,82 @@ def run_visual_dqn():
             loss = agent.optimize_model(batch_size)
             if loss is not None: loss_history.append(loss)
 
-            game_surf = pygame.Surface((env.engine.screen_width, env.engine.screen_height))
-            game_surf.fill((0, 0, 0))
-            env.engine.draw(game_surf)
-            window.blit(pygame.transform.scale(game_surf, (MAX_WINDOW_W, MAX_WINDOW_H)), (0, 0))
+            # --- HIGH-SPEED RENDER THROTTLE ---
+            # Only draw the graphics every 15 steps (or if the episode ends)
+            if env._step_count % 15 == 0 or done:
+                game_surf = pygame.Surface((env.engine.screen_width, env.engine.screen_height))
+                game_surf.fill((0, 0, 0))
+                env.engine.draw(game_surf)
+                window.blit(pygame.transform.scale(game_surf, (MAX_WINDOW_W, MAX_WINDOW_H)), (0, 0))
 
-            # --- DIAGNOSTIC DASHBOARD ---
-            window.fill((15, 15, 20), (MAX_WINDOW_W, 0, DASHBOARD_W, win_h))
-            with torch.no_grad():
-                st_tensor = torch.FloatTensor(state).unsqueeze(0).to(agent.device)
-                q_vals = agent.policy_net(st_tensor).squeeze().cpu().numpy()
+                # --- DIAGNOSTIC DASHBOARD ---
+                window.fill((15, 15, 20), (MAX_WINDOW_W, 0, DASHBOARD_W, win_h))
 
-            action_names = ['UP', 'DOWN', 'LEFT', 'RIGHT']
+                with torch.no_grad():
+                    st_tensor = torch.FloatTensor(state).unsqueeze(0).to(agent.device)
+                    q_vals = agent.policy_net(st_tensor).squeeze().cpu().numpy()
 
-            y_off = 20
-            window.blit(header_font.render("=== DQN LOGIC (ABSOLUTE) ===", True, (255, 215, 0)), (MAX_WINDOW_W + 15, y_off))
-            y_off += 30
-            window.blit(header_font.render(f"Decision: {action_names[action]}", True, (0, 255, 0)), (MAX_WINDOW_W + 15, y_off))
-            y_off += 30
+                action_names = ['UP', 'DOWN', 'LEFT', 'RIGHT']
 
-            window.blit(header_font.render("--- Q-Values ---", True, (255, 215, 0)), (MAX_WINDOW_W + 15, y_off))
-            y_off += 25
-            for i, name in enumerate(action_names):
-                window.blit(dash_font.render(f"{name:<5}: {q_vals[i]:+08.2f}", True, (255, 255, 255)), (MAX_WINDOW_W + 15, y_off))
+                y_off = 20
+                window.blit(header_font.render("=== DQN LOGIC (ABSOLUTE) ===", True, (255, 215, 0)), (MAX_WINDOW_W + 15, y_off))
+                y_off += 30
+                window.blit(header_font.render(f"Decision: {action_names[action]}", True, (0, 255, 0)), (MAX_WINDOW_W + 15, y_off))
+                y_off += 30
+
+                window.blit(header_font.render("--- Q-Values ---", True, (255, 215, 0)), (MAX_WINDOW_W + 15, y_off))
+                y_off += 25
+                for i, name in enumerate(action_names):
+                    window.blit(dash_font.render(f"{name:<5}: {q_vals[i]:+08.2f}", True, (255, 255, 255)), (MAX_WINDOW_W + 15, y_off))
+                    y_off += 25
+
+                y_off += 10
+                window.blit(header_font.render("--- 11x11 Local Grid ---", True, (255, 215, 0)), (MAX_WINDOW_W + 15, y_off))
                 y_off += 25
 
-            y_off += 10
-            window.blit(header_font.render("--- 11x11 Local Grid ---", True, (255, 215, 0)), (MAX_WINDOW_W + 15, y_off))
-            y_off += 25
+                # --- COLOR MATRIX RENDERER ---
+                grid_slice = state[:121].reshape((11, 11))
+                char_width = dash_font.size("#")[0] + 4 # Pixel width per character + spacing padding
 
-            # --- COLOR MATRIX RENDERER ---
-            grid_slice = state[:121].reshape((11, 11))
-            char_width = dash_font.size("#")[0] + 4 # Pixel width per character + spacing padding
+                for r in range(11):
+                    curr_x = MAX_WINDOW_W + 15
+                    for c in range(11):
+                        if r == 5 and c == 5:
+                            char = 'P' # Pac-Man is always center
+                        else:
+                            char = map_value_to_char(grid_slice[r][c])
 
-            for r in range(11):
-                curr_x = MAX_WINDOW_W + 15
-                for c in range(11):
-                    if r == 5 and c == 5:
-                        char = 'P' # Pac-Man is always center
-                    else:
-                        char = map_value_to_char(grid_slice[r][c])
+                        color = get_color_for_char(char)
+                        char_surf = dash_font.render(char, True, color)
+                        window.blit(char_surf, (curr_x, y_off))
 
-                    color = get_color_for_char(char)
-                    char_surf = dash_font.render(char, True, color)
-                    window.blit(char_surf, (curr_x, y_off))
+                        curr_x += char_width # Step to the right for the next column
+                    y_off += 20 # Step down for the next row
 
-                    curr_x += char_width # Step to the right for the next column
-                y_off += 20 # Step down for the next row
+                y_off += 15
+                fright_flag = state[121]
+                window.blit(header_font.render(f"Fright: {fright_flag:.2f}", True, (255, 105, 180)), (MAX_WINDOW_W + 15, y_off))
 
-            y_off += 15
-            fright_flag = state[121]
-            window.blit(header_font.render(f"Fright: {fright_flag:.2f}", True, (255, 105, 180)), (MAX_WINDOW_W + 15, y_off))
+                # --- INFO BAR ---
+                window.fill((20, 20, 20), (0, MAX_WINDOW_H, MAX_WINDOW_W, INFO_BAR_H))
+                avg_loss = sum(loss_history)/len(loss_history) if loss_history else 0.0
+                info = f"Ep: {episode} | Step: {env._step_count} | Rwd: {total_reward:+.1f} | Eps: {agent.epsilon:.3f} | Loss: {avg_loss:.2f}"
+                window.blit(info_font.render(info, True, (255, 215, 0)), (15, MAX_WINDOW_H + 20))
 
-            # --- INFO BAR ---
-            window.fill((20, 20, 20), (0, MAX_WINDOW_H, MAX_WINDOW_W, INFO_BAR_H))
-            avg_loss = sum(loss_history)/len(loss_history) if loss_history else 0.0
-            info = f"Ep: {episode} | Step: {env._step_count} | Rwd: {total_reward:+.1f} | Eps: {agent.epsilon:.3f} | Loss: {avg_loss:.2f}"
-            window.blit(info_font.render(info, True, (255, 215, 0)), (15, MAX_WINDOW_H + 20))
+                pygame.display.flip()
 
-            pygame.display.flip()
+            # Tick at 0 to run uncapped
             fps_clock.tick(TARGET_FPS)
             state = next_state
 
+        # Episode finished — record outcome and possibly promote curriculum stage
+        won = env.engine.won
+        curriculum.update_performance(won)
+        curriculum.check_promotion()
+
         agent.update_target_network()
-        if episode % 50 == 0: torch.save(agent.policy_net.state_dict(), SAVE_PATH)
+        if episode % 50 == 0:
+            torch.save(agent.policy_net.state_dict(), SAVE_PATH)
 
 if __name__ == "__main__":
     run_visual_dqn()
