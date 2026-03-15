@@ -360,20 +360,33 @@ class GameEngine:
         pellets = []
 
         m = self.maze
-        # Safely extract cage bounds (if present)
+        ts = self.tile_size
+        half_ts = ts // 2
+
+        # Safely extract cage bounds (if present) to prevent spawning food inside the ghost house
         cage_left = getattr(m, 'cage_left', -1)
         cage_right = getattr(m, 'cage_right', -1)
         cage_top = getattr(m, 'cage_top', -1)
         cage_bottom = getattr(m, 'cage_bottom', -1)
 
+        def is_in_cage(tx, ty):
+            return (cage_left <= tx <= cage_right) and (cage_top <= ty <= cage_bottom)
+
         for y in range(m.height):
             for x in range(m.width):
-                if m.maze[y][x] == 0:
-                    # Match maze_viewer: exclude tiles that are inside the cage box
-                    in_cage = (cage_left <= x <= cage_right) and (cage_top <= y <= cage_bottom)
-                    if not in_cage:
-                        pellets.append((x * self.tile_size + self.tile_size // 2,
-                                        y * self.tile_size + self.tile_size // 2))
+                if m.maze[y][x] == 0 and not is_in_cage(x, y):
+                    # 1. Spawn Center Pellet
+                    cx = x * ts + half_ts
+                    cy = y * ts + half_ts
+                    pellets.append((cx, cy))
+
+                    # 2. Spawn Right Edge Pellet (if the corridor continues right)
+                    if x + 1 < m.width and m.maze[y][x + 1] == 0 and not is_in_cage(x + 1, y):
+                        pellets.append((cx + half_ts, cy))
+
+                    # 3. Spawn Bottom Edge Pellet (if the corridor continues down)
+                    if y + 1 < m.height and m.maze[y + 1][x] == 0 and not is_in_cage(x, y + 1):
+                        pellets.append((cx, cy + half_ts))
 
         total_possible = len(pellets)
 
