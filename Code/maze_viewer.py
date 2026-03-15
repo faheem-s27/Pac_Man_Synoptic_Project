@@ -2,6 +2,7 @@ import sys
 import os
 import argparse
 import pygame
+import random
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 if _HERE not in sys.path:
@@ -10,7 +11,7 @@ if _HERE not in sys.path:
 from Code.Maze import Maze
 from Code.Pathfinding import Pathfinding, validate_maze_connectivity
 
-# Ghost colors (Blinky, Pinky, Inky, Clyde)
+# Ghost colors
 BLINKY_RED = (255, 0, 0)
 PINKY_PINK = (255, 184, 255)
 INKY_CYAN = (0, 255, 255)
@@ -18,26 +19,19 @@ CLYDE_ORANGE = (255, 184, 82)
 
 
 def _build_maze_grid_from_seed(tile_size, width, height, algorithm, seed):
-    """Helper to construct a Maze and return its underlying grid for comparison."""
     m = Maze(tile_size=tile_size, width=width, height=height,
              algorithm=algorithm, seed=seed)
     return m, [row[:] for row in m.maze]
 
 
 def _compute_spawn_for_flood(maze):
-    """Match validate_maze_connectivity's spawn selection.
-
-    Spawn is door_x, cage_bottom+1, with a small vertical search for an
-    open/door tile if that exact cell is blocked.
-    """
     spawn_gx = getattr(maze, 'door_x', maze.width // 2)
     spawn_gy = getattr(maze, 'cage_bottom', maze.height // 2) + 1
 
     spawn_gx = max(0, min(maze.width - 1, spawn_gx))
     spawn_gy = max(0, min(maze.height - 1, spawn_gy))
 
-    if getattr(maze, 'maze', None) is None:
-        return None
+    if getattr(maze, 'maze', None) is None: return None
 
     if maze.maze[spawn_gy][spawn_gx] not in (0, 2):
         found = False
@@ -47,29 +41,22 @@ def _compute_spawn_for_flood(maze):
                 spawn_gy = ny
                 found = True
                 break
-        if not found:
-            return None
+        if not found: return None
 
     return spawn_gx, spawn_gy
 
 
 def _compute_flood_reachable(maze):
-    """Run the same strict flood fill as validate_maze_connectivity and
-    return the set of reachable tiles from spawn.
-    """
     start = _compute_spawn_for_flood(maze)
-    if start is None:
-        return set()
+    if start is None: return set()
 
     sx, sy = start
-
     visited = set()
     queue = [(sx, sy)]
 
     while queue:
         cx, cy = queue.pop(0)
-        if (cx, cy) in visited:
-            continue
+        if (cx, cy) in visited: continue
         visited.add((cx, cy))
 
         for dx, dy in [(0, -1), (0, 1), (-1, 0), (1, 0)]:
@@ -82,9 +69,6 @@ def _compute_flood_reachable(maze):
 
 
 def _get_spawn_and_corners(maze):
-    """Return Pac-Man spawn grid position and the four corner targets for
-    visual path overlays (separate from flood-fill)."""
-    # Spawn: one row below cage bottom, same column as door, with fallback search
     spawn_gx = getattr(maze, 'door_x', maze.width // 2)
     spawn_gy = getattr(maze, 'cage_bottom', maze.height // 2) + 1
 
@@ -92,188 +76,161 @@ def _get_spawn_and_corners(maze):
     spawn_gy = max(0, min(maze.height - 1, spawn_gy))
 
     if maze.maze[spawn_gy][spawn_gx] not in (0, 2):
-        found = False
         for dy in range(-3, 4):
             ny = spawn_gy + dy
             if 0 <= ny < maze.height and maze.maze[ny][spawn_gx] in (0, 2):
                 spawn_gy = ny
-                found = True
                 break
-        if not found:
-            # No valid spawn found; still return something, but paths will be empty
-            pass
 
-    # Corner targets (inset from borders)
     corners = [
         (1, 1),
         (maze.width - 2, 1),
         (1, maze.height - 2),
         (maze.width - 2, maze.height - 2),
     ]
-
     return (spawn_gx, spawn_gy), corners
+
+
+def _compute_nodes(maze):
+    nodes = []
+    directions = [(0, -1), (0, 1), (-1, 0), (1, 0)]
+    opposites = {(0, -1): (0, 1), (0, 1): (0, -1), (-1, 0): (1, 0), (1, 0): (-1, 0)}
+
+    for y in range(maze.height):
+        for x in range(maze.width):
+            if maze.maze[y][x] in (0, 2):
+                valid_dirs = []
+                for dx, dy in directions:
+                    nx, ny = x + dx, y + dy
+                    if 0 <= nx < maze.width and 0 <= ny < maze.height:
+                        if maze.maze[ny][nx] in (0, 2):
+                            valid_dirs.append((dx, dy))
+
+                is_node = False
+                if len(valid_dirs) >= 3: is_node = True
+                elif len(valid_dirs) == 2:
+                    if opposites[valid_dirs[0]] != valid_dirs[1]: is_node = True
+                elif len(valid_dirs) == 1: is_node = True
+
+                if is_node: nodes.append((x, y))
+    return nodes
 
 
 def run_viewer(seed=None, algorithm="recursive_backtracking", tile_size=40,
                show_pellets=True, show_power_pellets=True,
-               show_flood_fill=True):
+               show_flood_fill=True, show_nodes=True):
     pygame.init()
 
-    # Base maze used for rendering
-    maze, base_grid = _build_maze_grid_from_seed(
-        tile_size=tile_size,
-        width=20,
-        height=21,
-        algorithm=algorithm,
-        seed=seed,
-    )
-
-    # Determine seed validity according to strict flood-fill validator
-    seed_status = "N/A"
-    if seed is not None:
-        try:
-            _, test_grid = _build_maze_grid_from_seed(
-                tile_size=tile_size,
-                width=20,
-                height=21,
-                algorithm=algorithm,
-                seed=seed,
-            )
-            if base_grid == test_grid:
-                seed_status = "VALID" if validate_maze_connectivity(maze) else "INVALID (flood-fill unreachable tiles)"
-            else:
-                seed_status = "INPUT SEED BANNED → viewer showing resampled layout"
-        except Exception:
-            seed_status = "ERROR WHEN RECHECKING SEED"
-
-    if seed is None:
-        # test if its valid
-        try:
-            if validate_maze_connectivity(maze):
-                seed_status = "VALID (randomly generated)"
-            else:
-                seed_status = "INVALID (flood-fill unreachable tiles)"
-        except Exception:
-            seed_status = "ERROR WHEN VALIDATING RANDOM SEED"
-
-    width_px = maze.width * tile_size
-    height_px = maze.height * tile_size
+    # Fixed dimensions based on current engine specs
+    MAZE_W_TILES = 20
+    MAZE_H_TILES = 21
+    width_px = MAZE_W_TILES * tile_size
+    height_px = MAZE_H_TILES * tile_size
 
     screen = pygame.display.set_mode((width_px, height_px))
-    pygame.display.set_caption(f"Maze Viewer - seed={seed} [{seed_status}]")
     clock = pygame.time.Clock()
+    font = pygame.font.SysFont(None, 20)
 
-    pellets = []
+    def reload_maze(target_seed):
+        """Encapsulates all computation so it can be re-triggered on click."""
+        maze, base_grid = _build_maze_grid_from_seed(
+            tile_size, MAZE_W_TILES, MAZE_H_TILES, algorithm, target_seed
+        )
 
-    # Safely extract cage boundaries
-    cage_left = getattr(maze, 'cage_left', -1)
-    cage_right = getattr(maze, 'cage_right', -1)
-    cage_top = getattr(maze, 'cage_top', -1)
-    cage_bottom = getattr(maze, 'cage_bottom', -1)
+        # 1. Validation
+        if target_seed is not None:
+            try:
+                _, test_grid = _build_maze_grid_from_seed(tile_size, MAZE_W_TILES, MAZE_H_TILES, algorithm, target_seed)
+                if base_grid == test_grid:
+                    seed_status = "VALID" if validate_maze_connectivity(maze) else "INVALID (flood-fill failed)"
+                else:
+                    seed_status = "INPUT SEED BANNED → resampled layout"
+            except Exception:
+                seed_status = "ERROR RECHECKING"
+        else:
+            seed_status = "VALID (random)" if validate_maze_connectivity(maze) else "INVALID (flood-fill failed)"
 
-    if show_pellets or show_power_pellets:
-        # Simplified pellet placement with strict cage exclusion
+        pygame.display.set_caption(f"Maze Viewer - seed={target_seed} [{seed_status}]")
+
+        # 2. Extract Data
+        cage_left = getattr(maze, 'cage_left', -1)
+        cage_right = getattr(maze, 'cage_right', -1)
+        cage_top = getattr(maze, 'cage_top', -1)
+        cage_bottom = getattr(maze, 'cage_bottom', -1)
+
+        pellets = []
         for y in range(maze.height):
             for x in range(maze.width):
                 if maze.maze[y][x] == 0:
-                    in_cage = (cage_left <= x <= cage_right) and (cage_top <= y <= cage_bottom)
-                    if not in_cage:
-                        pellets.append((x * tile_size + tile_size // 2,
-                                        y * tile_size + tile_size // 2))
+                    if not ((cage_left <= x <= cage_right) and (cage_top <= y <= cage_bottom)):
+                        pellets.append((x * tile_size + tile_size // 2, y * tile_size + tile_size // 2))
 
-    # Precompute pathfinding paths from spawn to each corner
-    spawn_g, corners = _get_spawn_and_corners(maze)
-    pf = Pathfinding(maze)
-    paths = []
-    corner_colors = [BLINKY_RED, PINKY_PINK, INKY_CYAN, CLYDE_ORANGE]
+        spawn_g, corners = _get_spawn_and_corners(maze)
+        pf = Pathfinding(maze)
+        paths = []
+        for (tx, ty), color in zip(corners, [BLINKY_RED, PINKY_PINK, INKY_CYAN, CLYDE_ORANGE]):
+            path = pf.find_shortest_path(spawn_g[0], spawn_g[1], tx, ty, current_dir=(0, 0)) if (0 <= tx < maze.width and 0 <= ty < maze.height) else []
+            paths.append((path, color))
 
-    for (tx, ty), color in zip(corners, corner_colors):
-        if 0 <= tx < maze.width and 0 <= ty < maze.height:
-            path = pf.find_shortest_path(spawn_g[0], spawn_g[1], tx, ty,
-                                         current_dir=(0, 0))
-        else:
-            path = []
-        paths.append((path, color))
+        flood_reachable = _compute_flood_reachable(maze)
+        topological_nodes = _compute_nodes(maze)
 
-    # Precompute flood-fill reachable tiles (strict validator view)
-    flood_reachable = _compute_flood_reachable(maze) if show_flood_fill else set()
+        return maze, target_seed, seed_status, pellets, spawn_g, paths, flood_reachable, topological_nodes
+
+    # Initial Load
+    active_seed = seed if seed is not None else random.randint(0, 2**31 - 1)
+    maze, current_seed, seed_status, pellets, spawn_g, paths, flood_reachable, topological_nodes = reload_maze(active_seed)
 
     running = True
-    font = pygame.font.SysFont(None, 20)
-
     while running:
         for event in pygame.event.get():
-            if event.type == pygame.QUIT:
+            if event.type == pygame.QUIT or (event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE):
                 running = False
-            elif event.type == pygame.KEYDOWN:
-                if event.key == pygame.K_ESCAPE:
-                    running = False
+            elif event.type == pygame.MOUSEBUTTONDOWN:
+                # RECALCULATE ENTIRE MAZE ON CLICK
+                active_seed = random.randint(0, 2**31 - 1)
+                maze, current_seed, seed_status, pellets, spawn_g, paths, flood_reachable, topological_nodes = reload_maze(active_seed)
 
         screen.fill((0, 0, 0))
         maze.draw(screen)
 
-        # Optional flood-fill overlay (semi-transparent blue on reachable tiles)
         if show_flood_fill and flood_reachable:
             overlay = pygame.Surface((width_px, height_px), pygame.SRCALPHA)
             for gx, gy in flood_reachable:
-                px = gx * tile_size
-                py = gy * tile_size
-                pygame.draw.rect(overlay, (0, 0, 255, 60), pygame.Rect(px, py, tile_size, tile_size))
+                pygame.draw.rect(overlay, (0, 0, 255, 60), pygame.Rect(gx * tile_size, gy * tile_size, tile_size, tile_size))
             screen.blit(overlay, (0, 0))
 
-        # Draw pellets
         if show_pellets:
             for px, py in pellets:
                 pygame.draw.circle(screen, (255, 255, 0), (px, py), max(2, tile_size // 8))
 
-        # Power pellets optional: for now, use same as pellets but larger and different color
         if show_power_pellets:
-            pp_color = (0, 255, 255)
-            corner_tiles = [
-                (1, 1),
-                (maze.width - 2, 1),
-                (1, maze.height - 2),
-                (maze.width - 2, maze.height - 2),
-            ]
+            corner_tiles = [(1, 1), (maze.width - 2, 1), (1, maze.height - 2), (maze.width - 2, maze.height - 2)]
             for gx, gy in corner_tiles:
                 if 0 <= gx < maze.width and 0 <= gy < maze.height and maze.maze[gy][gx] == 0:
-                    px = gx * tile_size + tile_size // 2
-                    py = gy * tile_size + tile_size // 2
-                    pygame.draw.circle(screen, pp_color, (px, py), max(4, tile_size // 6))
+                    pygame.draw.circle(screen, (0, 255, 255), (gx * tile_size + tile_size // 2, gy * tile_size + tile_size // 2), max(4, tile_size // 6))
 
-        # Draw pathfinding paths from spawn to each corner in ghost colors
         for path, color in paths:
-            if not path:
-                continue
-            pts = []
-            for gx, gy in path:
-                px = gx * tile_size + tile_size // 2
-                py = gy * tile_size + tile_size // 2
-                pts.append((px, py))
-            if len(pts) >= 2:
-                pygame.draw.lines(screen, color, False, pts, max(2, tile_size // 20))
-            tx, ty = path[-1]
-            tx_px = tx * tile_size + tile_size // 2
-            ty_px = ty * tile_size + tile_size // 2
-            pygame.draw.circle(screen, color, (tx_px, ty_px), max(3, tile_size // 10))
+            if not path: continue
+            pts = [(gx * tile_size + tile_size // 2, gy * tile_size + tile_size // 2) for gx, gy in path]
+            if len(pts) >= 2: pygame.draw.lines(screen, color, False, pts, max(2, tile_size // 20))
+            pygame.draw.circle(screen, color, pts[-1], max(3, tile_size // 10))
 
-        # Highlight the spawn point (same as flood-fill start)
+        # --- TOPOLOGICAL NODES ---
+        if show_nodes:
+            for nx, ny in topological_nodes:
+                px, py = nx * tile_size + tile_size // 2, ny * tile_size + tile_size // 2
+                pygame.draw.circle(screen, (0, 255, 0), (px, py), max(4, tile_size // 4))
+                pygame.draw.circle(screen, (0, 0, 0), (px, py), max(2, tile_size // 8))
+
+        # Spawn Marker
         spawn_for_flood = _compute_spawn_for_flood(maze)
-        if spawn_for_flood is not None:
-            sx, sy = spawn_for_flood
-        else:
-            sx, sy = spawn_g
-        sx_px = sx * tile_size + tile_size // 2
-        sy_px = sy * tile_size + tile_size // 2
-        pygame.draw.circle(screen, (255, 255, 255), (sx_px, sy_px), max(4, tile_size // 9), 1)
+        sx, sy = spawn_for_flood if spawn_for_flood else spawn_g
+        pygame.draw.circle(screen, (255, 255, 255), (sx * tile_size + tile_size // 2, sy * tile_size + tile_size // 2), max(4, tile_size // 9), 1)
 
-        # Overlay seed status text at top-left
-        if seed is not None:
-            text = f"Seed: {seed} | Status: {seed_status}"
-        else:
-            text = f"Seed: random | Status: {seed_status}"
-        text_surf = font.render(text, True, (255, 255, 255))
-        screen.blit(text_surf, (5, 5))
+        # Text Overlay
+        text = f"Seed: {current_seed} | Status: {seed_status} | CLICK TO RANDOMIZE"
+        screen.blit(font.render(text, True, (255, 255, 255)), (5, 5))
 
         pygame.display.flip()
         clock.tick(60)
@@ -282,16 +239,17 @@ def run_viewer(seed=None, algorithm="recursive_backtracking", tile_size=40,
 
 
 if __name__ == "__main__":
-    SEED = 2041178492
+    SEED = None
     parser = argparse.ArgumentParser(description="Standalone maze viewer for inspecting generated layouts/seeds.")
     parser.add_argument("--seed", type=int, default=SEED, help="Maze seed to visualize.")
     parser.add_argument("--algorithm", type=str, default="recursive_backtracking",
                         choices=["recursive_backtracking", "prims", "random_walk"],
                         help="Maze generation algorithm.")
     parser.add_argument("--tile-size", type=int, default=40, help="Tile size in pixels.")
-    parser.add_argument("--no-pellets", action="store_true", help="Hide regular pellets.")
-    parser.add_argument("--no-power-pellets", action="store_true", help="Hide power pellets overlay.")
-    parser.add_argument("--no-flood", action="store_true", help="Disable flood-fill debug overlay.")
+    parser.add_argument("--no-pellets", action="store_false", help="Hide regular pellets.")
+    parser.add_argument("--no-power-pellets", action="store_false", help="Hide power pellets overlay.")
+    parser.add_argument("--no-flood", action="store_false", help="Disable flood-fill debug overlay.")
+    parser.add_argument("--no-nodes", action="store_true", help="Hide topological node overlay.")
 
     args = parser.parse_args()
 
@@ -302,4 +260,5 @@ if __name__ == "__main__":
         show_pellets=not args.no_pellets,
         show_power_pellets=not args.no_power_pellets,
         show_flood_fill=not args.no_flood,
+        show_nodes=not args.no_nodes
     )

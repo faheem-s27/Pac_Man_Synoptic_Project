@@ -1,8 +1,8 @@
 """
 dqn_train_visual.py
 ===================
-A real-time monitor tailored for the 27-input Raycast + Compass + Fright-Timer.
-Incorporates Egocentric Action Masking. Optimized for high-speed intersection jumping.
+A real-time monitor tailored for the Dense 11x11 Grid (122-input) Architecture.
+Features a fully colored, monospaced diagnostic matrix.
 """
 
 import sys
@@ -12,7 +12,6 @@ import torch
 import random
 import numpy as np
 
-# Path resolution for imports
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _ROOT = os.path.dirname(os.path.dirname(os.path.dirname(_HERE)))
 if _ROOT not in sys.path:
@@ -22,13 +21,33 @@ from Code.PacManEnv import PacManEnv
 from Code.CurriculumManager import CurriculumManager
 from dqn_agent import DQNAgent
 
-# --- Tunables ---
 MAX_WINDOW_W = 800
 MAX_WINDOW_H = 800
 DASHBOARD_W  = 400
 INFO_BAR_H   = 60
-TARGET_FPS   = 120 # Dashboard update speed
+TARGET_FPS   = 120
 SAVE_PATH    = os.path.join(_HERE, "dqn_pacman.pth")
+
+def map_value_to_char(val):
+    """Converts the raw float to an ASCII character for the diagnostic mini-map."""
+    if val == -1.0: return '#'  # Wall
+    if val == -0.8: return 'G'  # Lethal Ghost
+    if val == 0.0:  return '.'  # Empty floor
+    if val == 0.5:  return 'o'  # Pellet
+    if val == 0.8:  return 'F'  # Frightened Ghost
+    if val == 1.0:  return 'O'  # Power Pellet
+    return '?'
+
+def get_color_for_char(char):
+    """Maps the ASCII character to a high-contrast RGB tuple."""
+    if char == '#': return (50, 100, 255)   # Deep Blue (Walls)
+    if char == '.': return (70, 70, 70)     # Dark Gray (Floor)
+    if char == 'o': return (255, 255, 0)    # Yellow (Pellets)
+    if char == 'O': return (0, 255, 255)    # Cyan (Power Pellets)
+    if char == 'G': return (255, 0, 0)      # Red (Lethal Ghosts)
+    if char == 'F': return (255, 105, 180)  # Pink (Frightened)
+    if char == 'P': return (0, 255, 0)      # Neon Green (Pac-Man)
+    return (255, 255, 255)
 
 def run_visual_dqn():
     pygame.init()
@@ -36,17 +55,20 @@ def run_visual_dqn():
     win_w = MAX_WINDOW_W + DASHBOARD_W
     win_h = MAX_WINDOW_H + INFO_BAR_H
     window = pygame.display.set_mode((win_w, win_h))
-    pygame.display.set_caption("DQN Pac-Man — EGOCENTRIC VISUAL TRAINER")
+    pygame.display.set_caption("DQN Pac-Man — DENSE 11x11 COLOR MATRIX")
 
     info_font = pygame.font.Font(None, 28)
-    dash_font = pygame.font.Font(None, 24)
+    # CRITICAL: Must use SysFont('monospace') to ensure the matrix aligns perfectly
+    dash_font = pygame.font.SysFont('monospace', 22, bold=True)
+    header_font = pygame.font.Font(None, 26)
     fps_clock = pygame.time.Clock()
 
-    curriculum = CurriculumManager(stage_duration=500)
+    curriculum = CurriculumManager(stage_duration=1000)
     base_settings = curriculum.get_settings_for_generation(0)
 
+    # ACTION: 122 inputs, 4 absolute outputs
     env = PacManEnv(render_mode=None, **base_settings)
-    agent = DQNAgent(input_dim=27, output_dim=3)
+    agent = DQNAgent(input_dim=122, output_dim=4)
 
     if os.path.exists(SAVE_PATH):
         try:
@@ -81,10 +103,9 @@ def run_visual_dqn():
                     pygame.quit()
                     sys.exit()
 
-            valid_rel_actions = env.get_valid_relative_actions()
-            action = agent.select_action(state, valid_actions=valid_rel_actions)
+            # The environment handles collision now; pass all 4 absolute actions
+            action = agent.select_action(state, valid_actions=[0, 1, 2, 3])
 
-            # High-speed physics execution without rendering callback
             next_state, reward, terminated, truncated, _ = env.step(action)
             done = terminated or truncated
 
@@ -94,64 +115,59 @@ def run_visual_dqn():
             loss = agent.optimize_model(batch_size)
             if loss is not None: loss_history.append(loss)
 
-            # RENDERING
             game_surf = pygame.Surface((env.engine.screen_width, env.engine.screen_height))
             game_surf.fill((0, 0, 0))
             env.engine.draw(game_surf)
-            env._screen = game_surf
-            env._draw_debug_sensors()
             window.blit(pygame.transform.scale(game_surf, (MAX_WINDOW_W, MAX_WINDOW_H)), (0, 0))
 
-            # DASHBOARD
+            # --- DIAGNOSTIC DASHBOARD ---
             window.fill((15, 15, 20), (MAX_WINDOW_W, 0, DASHBOARD_W, win_h))
             with torch.no_grad():
                 st_tensor = torch.FloatTensor(state).unsqueeze(0).to(agent.device)
                 q_vals = agent.policy_net(st_tensor).squeeze().cpu().numpy()
 
-            action_names = ['FORWARD', 'LEFT', 'RIGHT']
-
-            lines = [
-                "=== DQN DEBUG HUD (27-D Ego-Centric) ===",
-                f"Action: {action_names[action]}",
-                f"Valid:  {[action_names[a] for a in valid_rel_actions]}",
-                "",
-                "--- Raw Q-Values ---",
-                f"FWD: {q_vals[0]:+08.2f}",
-                f"LFT: {q_vals[1]:+08.2f}",
-                f"RGT: {q_vals[2]:+08.2f}",
-                "",
-                "--- 8 Ego-Raycasts (Wall|Food|Ghost) ---",
-                "Dir | Wall | Food | Ghost",
-            ]
-
-            dir_labels = ["F", "B", "L", "R", "F-L", "F-R", "B-L", "B-R"]
-            for i, d in enumerate(dir_labels):
-                row = f"{d:<3} | {state[i*3]:4.2f} | {state[i*3+1]:4.2f} | {state[i*3+2]:+4.2f}"
-                lines.append(row)
-
-            compass_x, compass_y = state[24], state[25]
-            fright_flag = state[26]
-
-            lines.extend([
-                "",
-                "--- Ego Compass (X=FWD, Y=LFT) ---",
-                f"Vec X: {compass_x:+4.2f}",
-                f"Vec Y: {compass_y:+4.2f}",
-                "",
-                "--- Global Status ---",
-                f"Fright Mode: {'ACTIVE' if fright_flag > 0.5 else 'INACTIVE'}",
-            ])
+            action_names = ['UP', 'DOWN', 'LEFT', 'RIGHT']
 
             y_off = 20
-            for line in lines:
-                color = (255, 215, 0) if "---" in line or "===" in line else (255, 255, 255)
-                if "Valid" in line: color = (0, 255, 255)
-                elif "Action:" in line: color = (0, 255, 0)
-                elif "ACTIVE" in line: color = (0, 255, 0)
-                window.blit(dash_font.render(line, True, color), (MAX_WINDOW_W + 15, y_off))
+            window.blit(header_font.render("=== DQN LOGIC (ABSOLUTE) ===", True, (255, 215, 0)), (MAX_WINDOW_W + 15, y_off))
+            y_off += 30
+            window.blit(header_font.render(f"Decision: {action_names[action]}", True, (0, 255, 0)), (MAX_WINDOW_W + 15, y_off))
+            y_off += 30
+
+            window.blit(header_font.render("--- Q-Values ---", True, (255, 215, 0)), (MAX_WINDOW_W + 15, y_off))
+            y_off += 25
+            for i, name in enumerate(action_names):
+                window.blit(dash_font.render(f"{name:<5}: {q_vals[i]:+08.2f}", True, (255, 255, 255)), (MAX_WINDOW_W + 15, y_off))
                 y_off += 25
 
-            # INFO BAR
+            y_off += 10
+            window.blit(header_font.render("--- 11x11 Local Grid ---", True, (255, 215, 0)), (MAX_WINDOW_W + 15, y_off))
+            y_off += 25
+
+            # --- COLOR MATRIX RENDERER ---
+            grid_slice = state[:121].reshape((11, 11))
+            char_width = dash_font.size("#")[0] + 4 # Pixel width per character + spacing padding
+
+            for r in range(11):
+                curr_x = MAX_WINDOW_W + 15
+                for c in range(11):
+                    if r == 5 and c == 5:
+                        char = 'P' # Pac-Man is always center
+                    else:
+                        char = map_value_to_char(grid_slice[r][c])
+
+                    color = get_color_for_char(char)
+                    char_surf = dash_font.render(char, True, color)
+                    window.blit(char_surf, (curr_x, y_off))
+
+                    curr_x += char_width # Step to the right for the next column
+                y_off += 20 # Step down for the next row
+
+            y_off += 15
+            fright_flag = state[121]
+            window.blit(header_font.render(f"Fright: {fright_flag:.2f}", True, (255, 105, 180)), (MAX_WINDOW_W + 15, y_off))
+
+            # --- INFO BAR ---
             window.fill((20, 20, 20), (0, MAX_WINDOW_H, MAX_WINDOW_W, INFO_BAR_H))
             avg_loss = sum(loss_history)/len(loss_history) if loss_history else 0.0
             info = f"Ep: {episode} | Step: {env._step_count} | Rwd: {total_reward:+.1f} | Eps: {agent.epsilon:.3f} | Loss: {avg_loss:.2f}"
