@@ -7,14 +7,14 @@ import random
 from collections import deque
 
 class QNetwork(nn.Module):
-    def __init__(self, input_dim=122, output_dim=4): # Expanded for 11x11 Grid (121) + Fright (1)
+    """Simple 25->64->64->4 MLP for egocentric raycasts (4 actions)."""
+    def __init__(self, input_dim: int = 25, output_dim: int = 4):
         super(QNetwork, self).__init__()
-        # Widened hidden layers to process the massive increase in spatial input data
-        self.fc1 = nn.Linear(input_dim, 128)
-        self.fc2 = nn.Linear(128, 128)
-        self.fc3 = nn.Linear(128, output_dim)
+        self.fc1 = nn.Linear(input_dim, 64)
+        self.fc2 = nn.Linear(64, 64)
+        self.fc3 = nn.Linear(64, output_dim)
 
-    def forward(self, state):
+    def forward(self, state: torch.Tensor) -> torch.Tensor:
         x = F.relu(self.fc1(state))
         x = F.relu(self.fc2(x))
         return self.fc3(x)
@@ -41,7 +41,8 @@ class ReplayBuffer:
         return len(self.buffer)
 
 class DQNAgent:
-    def __init__(self, input_dim=122, output_dim=4, lr=1e-4, gamma=0.99, epsilon_start=1.0, epsilon_end=0.05, epsilon_decay=100_000):
+    def __init__(self, input_dim: int = 25, output_dim: int = 4, lr: float = 1e-4, gamma: float = 0.99,
+                 epsilon_start: float = 1.0, epsilon_end: float = 0.05, epsilon_decay: int = 1_000_000):
         self.action_dim = output_dim
         self.gamma = gamma
         self.epsilon = epsilon_start
@@ -59,10 +60,10 @@ class DQNAgent:
         self.optimizer = optim.Adam(self.policy_net.parameters(), lr=lr)
         self.memory = ReplayBuffer()
 
-    def select_action(self, state, valid_actions=None):
+    def select_action(self, state, valid_actions=None) -> int:
         self.step_count += 1
         self.epsilon = max(self.epsilon_end, self.epsilon - (1.0 / self.epsilon_decay))
-        candidate_actions = valid_actions if valid_actions is not None and len(valid_actions) > 0 else list(range(self.action_dim))
+        candidate_actions = valid_actions if valid_actions else list(range(self.action_dim))
 
         if random.random() < self.epsilon:
             return random.choice(candidate_actions)
@@ -75,7 +76,7 @@ class DQNAgent:
                 masked_q[a] = q_values[a]
             return masked_q.argmax().item()
 
-    def optimize_model(self, batch_size=64):
+    def optimize_model(self, batch_size: int = 64):
         if len(self.memory) < batch_size:
             return None
 

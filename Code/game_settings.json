@@ -5,9 +5,9 @@
   "ghost_speed": 2,
   "maze_algorithm": "recursive_backtracking",
   "maze_seed": "",
-  "enable_ghosts": false,
+  "enable_ghosts": true,
   "enable_sound": false,
-  "lives": 3,
+  "lives": 1,
   "god_mode": false,
   "pellets_to_win": -1,
   "scatter_duration": 7,
@@ -15,8 +15,5 @@
   "always_chase": false,
   "level": 1,
   "ghost_speed_increment": 0.2,
-  "enable_power_pellets": true,
-
-  "step_penalty": -0.01,
-  "reversal_penalty": -0.2
+  "enable_power_pellets": true
 }

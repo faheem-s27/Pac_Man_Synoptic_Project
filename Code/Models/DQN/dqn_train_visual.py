@@ -1,8 +1,7 @@
 """
 dqn_train_visual.py
 ===================
-A real-time monitor tailored for the Dense 11x11 Grid (122-input) Architecture.
-Features a fully colored, monospaced diagnostic matrix and high-speed render throttling.
+Egocentric 25-input DQN visual trainer.
 """
 
 import sys
@@ -10,7 +9,7 @@ import os
 import pygame
 import torch
 import random
-import numpy as np
+import csv
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _ROOT = os.path.dirname(os.path.dirname(os.path.dirname(_HERE)))
@@ -25,29 +24,10 @@ MAX_WINDOW_W = 800
 MAX_WINDOW_H = 800
 DASHBOARD_W  = 400
 INFO_BAR_H   = 60
-TARGET_FPS   = 0 # 0 uncaps the clock for maximum calculation speed
+TARGET_FPS   = 120
 SAVE_PATH    = os.path.join(_HERE, "dqn_pacman.pth")
+LOG_PATH     = os.path.join(_HERE, "training_log.csv")
 
-def map_value_to_char(val):
-    """Converts the raw float to an ASCII character for the diagnostic mini-map."""
-    if val == -1.0: return '#'  # Wall
-    if val == -0.8: return 'G'  # Lethal Ghost
-    if val == 0.0:  return '.'  # Empty floor
-    if val == 0.5:  return 'o'  # Pellet
-    if val == 0.8:  return 'F'  # Frightened Ghost
-    if val == 1.0:  return 'O'  # Power Pellet
-    return '?'
-
-def get_color_for_char(char):
-    """Maps the ASCII character to a high-contrast RGB tuple."""
-    if char == '#': return (50, 100, 255)   # Deep Blue (Walls)
-    if char == '.': return (70, 70, 70)     # Dark Gray (Floor)
-    if char == 'o': return (255, 255, 0)    # Yellow (Pellets)
-    if char == 'O': return (0, 255, 255)    # Cyan (Power Pellets)
-    if char == 'G': return (255, 0, 0)      # Red (Lethal Ghosts)
-    if char == 'F': return (255, 105, 180)  # Pink (Frightened)
-    if char == 'P': return (0, 255, 0)      # Neon Green (Pac-Man)
-    return (255, 255, 255)
 
 def run_visual_dqn():
     pygame.init()
@@ -55,20 +35,18 @@ def run_visual_dqn():
     win_w = MAX_WINDOW_W + DASHBOARD_W
     win_h = MAX_WINDOW_H + INFO_BAR_H
     window = pygame.display.set_mode((win_w, win_h))
-    pygame.display.set_caption("DQN Pac-Man — DENSE 11x11 COLOR MATRIX")
+    pygame.display.set_caption("DQN Pac-Man — Egocentric 25D")
 
     info_font = pygame.font.Font(None, 28)
-    # CRITICAL: Must use SysFont('monospace') to ensure the matrix aligns perfectly
-    dash_font = pygame.font.SysFont('monospace', 22, bold=True)
+    dash_font = pygame.font.Font(None, 22)
     header_font = pygame.font.Font(None, 26)
     fps_clock = pygame.time.Clock()
 
     curriculum = CurriculumManager()
     base_settings = curriculum.get_settings()
 
-    # ACTION: 122 inputs, 4 absolute outputs
     env = PacManEnv(render_mode=None, **base_settings)
-    agent = DQNAgent(input_dim=122, output_dim=4)
+    agent = DQNAgent(input_dim=25, output_dim=4)
 
     if os.path.exists(SAVE_PATH):
         try:
@@ -81,21 +59,45 @@ def run_visual_dqn():
     batch_size = 64
     episode = 0
 
+    # Ensure CSV log file exists with header
+    if not os.path.exists(LOG_PATH):
+        with open(LOG_PATH, mode="w", newline="", encoding="utf-8") as f:
+            writer = csv.writer(f)
+            writer.writerow([
+                "Episode",
+                "Stage",
+                "Maze_Seed",
+                "Reward",
+                "Steps",
+                "Outcome",
+                "Epsilon",
+                "Pellets",
+                "Power_Pellets",
+                "Ghosts",
+                "Explore_Rate",
+                "Avg_Loss",
+            ])
+
     while True:
         episode += 1
 
-        # Get current stage settings and randomize maze seed for diversity
         current_settings = curriculum.get_settings()
         dynamic_seed = random.randint(0, 9999999)
         current_settings['maze_seed'] = dynamic_seed
+
+        # Sync environment telemetry with curriculum stage for logging
+        env.current_stage = getattr(curriculum, "current_stage", None)
 
         env._base_cfg.update(current_settings)
         env.max_episode_steps = current_settings.get('max_episode_steps', 2000)
 
         state, _ = env.reset(seed=dynamic_seed)
-        total_reward = 0
+        total_reward = 0.0
         loss_history = []
         done = False
+        episode_steps = 0
+        last_death_cause = "NONE"
+        last_info = {}
 
         while not done:
             for event in pygame.event.get():
@@ -105,89 +107,107 @@ def run_visual_dqn():
                     pygame.quit()
                     sys.exit()
 
-            # --- MATH & PHYSICS (Runs every tick) ---
+            # DQN step
             action = agent.select_action(state, valid_actions=[0, 1, 2, 3])
-            next_state, reward, terminated, truncated, _ = env.step(action)
+            next_state, reward, terminated, truncated, info = env.step(action)
             done = terminated or truncated
+
+            episode_steps += 1
+            if isinstance(info, dict):
+                last_info = info
+                if "death_cause" in info:
+                    last_death_cause = info["death_cause"]
 
             agent.memory.push(state, action, reward, next_state, done)
             total_reward += reward
 
             loss = agent.optimize_model(batch_size)
-            if loss is not None: loss_history.append(loss)
+            if loss is not None:
+                loss_history.append(loss)
 
-            # --- HIGH-SPEED RENDER THROTTLE ---
-            # Only draw the graphics every 15 steps (or if the episode ends)
-            if env._step_count % 15 == 0 or done:
-                game_surf = pygame.Surface((env.engine.screen_width, env.engine.screen_height))
-                game_surf.fill((0, 0, 0))
-                env.engine.draw(game_surf)
-                window.blit(pygame.transform.scale(game_surf, (MAX_WINDOW_W, MAX_WINDOW_H)), (0, 0))
+            # Draw every step for smooth visuals
+            game_surf = pygame.Surface((env.engine.screen_width, env.engine.screen_height))
+            game_surf.fill((0, 0, 0))
+            env.engine.draw(game_surf)
+            window.blit(pygame.transform.scale(game_surf, (MAX_WINDOW_W, MAX_WINDOW_H)), (0, 0))
 
-                # --- DIAGNOSTIC DASHBOARD ---
-                window.fill((15, 15, 20), (MAX_WINDOW_W, 0, DASHBOARD_W, win_h))
+            window.fill((15, 15, 20), (MAX_WINDOW_W, 0, DASHBOARD_W, win_h))
 
-                with torch.no_grad():
-                    st_tensor = torch.FloatTensor(state).unsqueeze(0).to(agent.device)
-                    q_vals = agent.policy_net(st_tensor).squeeze().cpu().numpy()
+            with torch.no_grad():
+                st_tensor = torch.FloatTensor(state).unsqueeze(0).to(agent.device)
+                q_vals = agent.policy_net(st_tensor).squeeze().cpu().numpy()
 
-                action_names = ['UP', 'DOWN', 'LEFT', 'RIGHT']
+            action_names = ['FORWARD', 'LEFT', 'RIGHT', 'BACKWARD']
 
-                y_off = 20
-                window.blit(header_font.render("=== DQN LOGIC (ABSOLUTE) ===", True, (255, 215, 0)), (MAX_WINDOW_W + 15, y_off))
-                y_off += 30
-                window.blit(header_font.render(f"Decision: {action_names[action]}", True, (0, 255, 0)), (MAX_WINDOW_W + 15, y_off))
-                y_off += 30
+            y_off = 20
+            window.blit(header_font.render("=== DQN LOGIC (EGOCENTRIC) ===", True, (255, 215, 0)), (MAX_WINDOW_W + 15, y_off))
+            y_off += 30
+            window.blit(header_font.render(f"Decision: {action_names[action]}", True, (0, 255, 0)), (MAX_WINDOW_W + 15, y_off))
+            y_off += 30
 
-                window.blit(header_font.render("--- Q-Values ---", True, (255, 215, 0)), (MAX_WINDOW_W + 15, y_off))
-                y_off += 25
-                for i, name in enumerate(action_names):
-                    window.blit(dash_font.render(f"{name:<5}: {q_vals[i]:+08.2f}", True, (255, 255, 255)), (MAX_WINDOW_W + 15, y_off))
-                    y_off += 25
+            window.blit(header_font.render("--- Q-Values ---", True, (255, 215, 0)), (MAX_WINDOW_W + 15, y_off))
+            y_off += 25
+            for i, name in enumerate(action_names):
+                window.blit(dash_font.render(f"{name:<7}: {q_vals[i]:+08.3f}", True, (255, 255, 255)), (MAX_WINDOW_W + 15, y_off))
+                y_off += 24
 
-                y_off += 10
-                window.blit(header_font.render("--- 11x11 Local Grid ---", True, (255, 215, 0)), (MAX_WINDOW_W + 15, y_off))
-                y_off += 25
+            y_off += 10
+            window.blit(header_font.render("--- Egocentric Rays (W|F|G) ---", True, (255, 215, 0)), (MAX_WINDOW_W + 15, y_off))
+            y_off += 25
 
-                # --- COLOR MATRIX RENDERER ---
-                grid_slice = state[:121].reshape((11, 11))
-                char_width = dash_font.size("#")[0] + 4 # Pixel width per character + spacing padding
+            labels = ['F', 'B', 'L', 'R', 'FL', 'FR', 'BL', 'BR']
+            for i, lab in enumerate(labels):
+                w, f, g = state[i*3], state[i*3+1], state[i*3+2]
+                line = f"{lab:<3} | W:{w:6.2f} F:{f:6.2f} G:{g:6.2f}"
+                window.blit(dash_font.render(line, True, (255, 255, 255)), (MAX_WINDOW_W + 15, y_off))
+                y_off += 22
 
-                for r in range(11):
-                    curr_x = MAX_WINDOW_W + 15
-                    for c in range(11):
-                        if r == 5 and c == 5:
-                            char = 'P' # Pac-Man is always center
-                        else:
-                            char = map_value_to_char(grid_slice[r][c])
+            y_off += 10
+            # Frightened timer observation: 1.0 at start of frightened mode, down to 0.0 as it expires
+            fright_flag = state[24]
+            window.blit(header_font.render(f"Fright timer: {fright_flag:.2f}", True, (255, 105, 180)), (MAX_WINDOW_W + 15, y_off))
 
-                        color = get_color_for_char(char)
-                        char_surf = dash_font.render(char, True, color)
-                        window.blit(char_surf, (curr_x, y_off))
+            window.fill((20, 20, 20), (0, MAX_WINDOW_H, MAX_WINDOW_W, INFO_BAR_H))
+            avg_loss = sum(loss_history)/len(loss_history) if loss_history else 0.0
+            info = f"Ep: {episode} | Step: {env._step_count} | Rwd: {total_reward:+.1f} | Eps: {agent.epsilon:.3f} | Loss: {avg_loss:.2f}"
+            window.blit(info_font.render(info, True, (255, 215, 0)), (15, MAX_WINDOW_H + 20))
 
-                        curr_x += char_width # Step to the right for the next column
-                    y_off += 20 # Step down for the next row
+            pygame.display.flip()
 
-                y_off += 15
-                fright_flag = state[121]
-                window.blit(header_font.render(f"Fright: {fright_flag:.2f}", True, (255, 105, 180)), (MAX_WINDOW_W + 15, y_off))
-
-                # --- INFO BAR ---
-                window.fill((20, 20, 20), (0, MAX_WINDOW_H, MAX_WINDOW_W, INFO_BAR_H))
-                avg_loss = sum(loss_history)/len(loss_history) if loss_history else 0.0
-                info = f"Ep: {episode} | Step: {env._step_count} | Rwd: {total_reward:+.1f} | Eps: {agent.epsilon:.3f} | Loss: {avg_loss:.2f}"
-                window.blit(info_font.render(info, True, (255, 215, 0)), (15, MAX_WINDOW_H + 20))
-
-                pygame.display.flip()
-
-            # Tick at 0 to run uncapped
             fps_clock.tick(TARGET_FPS)
             state = next_state
 
-        # Episode finished — record outcome and possibly promote curriculum stage
         won = env.engine.won
         curriculum.update_performance(won)
         curriculum.check_promotion()
+
+        # Per-episode logging to CSV
+        avg_loss = sum(loss_history) / len(loss_history) if loss_history else 0.0
+
+        # Extract telemetry fields from final info dict (fallbacks if missing)
+        stage = last_info.get("stage") if isinstance(last_info, dict) else None
+        maze_seed = last_info.get("maze_seed") if isinstance(last_info, dict) else None
+        pellets = int(last_info.get("pellets", 0)) if isinstance(last_info, dict) else 0
+        power_pellets = int(last_info.get("power_pellets", 0)) if isinstance(last_info, dict) else 0
+        ghosts = int(last_info.get("ghosts", 0)) if isinstance(last_info, dict) else 0
+        explore_rate = float(last_info.get("explore_rate", 0.0)) if isinstance(last_info, dict) else 0.0
+
+        with open(LOG_PATH, mode="a", newline="", encoding="utf-8") as f:
+            writer = csv.writer(f)
+            writer.writerow([
+                episode,
+                stage,
+                maze_seed,
+                float(total_reward),
+                int(episode_steps),
+                last_death_cause,
+                float(agent.epsilon),
+                pellets,
+                power_pellets,
+                ghosts,
+                explore_rate,
+                float(avg_loss),
+            ])
 
         agent.update_target_network()
         if episode % 50 == 0:

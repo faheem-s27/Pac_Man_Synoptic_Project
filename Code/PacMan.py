@@ -5,7 +5,7 @@ import os
 
 class PacMan:
     ANIMATION_FRAME_DELAY = 6  # 60 FPS / 6 ~= 10 animation frames per second
-    VISUAL_SCALE = 0.82
+    VISUAL_SCALE = 0.75
 
     def __init__(self, x, y, tile_size=40, speed=2):
         self.x = x

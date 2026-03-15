@@ -49,56 +49,59 @@ class CurriculumManager:
     def get_settings(self):
         """Return environment settings for the current curriculum stage.
 
-        Stages:
-            0: Rapid Foraging      — small pellet target, no ghosts
-            1: Map Mastery        — full clear, no ghosts
-            2: Evasion Bridge     — 1 ghost, partial pellet target
-            3: Hunting Context    — 2 ghosts, power pellets enabled
-            4+: The Gauntlet      — 4 ghosts, full clear with power pellets, long horizon
+        Balanced Progression:
+            0: Tutorial      — 20 pellets, No ghosts. (Learning to move)
+            1: Expansion     — 60 pellets, No ghosts. (Learning corridors)
+            2: Ghost Intro   — 60 pellets, 1 Static Ghost. (Learning 'Danger' exists)
+            3: First Hunt    — 80 pellets, 1 Active Ghost. (Learning Evasion)
+            4: Power Play    — 100 pellets, 2 Active Ghosts + Power Pellets. (Learning Aggression)
+            5: The Gauntlet  — Full Clear, 4 Active Ghosts. (Mastery)
         """
         settings = self.base_settings.copy()
-
-        # Fallback: any stage > 4 uses Stage 4 configuration
-        stage = min(self.current_stage, 4)
+        stage = self.current_stage  # No longer capping at 4
 
         if stage == 0:
-            # Stage 0 — Rapid Foraging
             settings['enable_ghosts'] = False
-            settings['pellets_to_win'] = 25
-            settings['lives'] = 1
+            settings['pellets_to_win'] = 20
+            settings['max_episode_steps'] = 1000
             settings['enable_power_pellets'] = False
 
         elif stage == 1:
-            # Stage 1 — Map Mastery (full clear)
             settings['enable_ghosts'] = False
-            settings['pellets_to_win'] = -1  # full clear
-            settings['lives'] = 1
+            settings['pellets_to_win'] = 60
+            settings['max_episode_steps'] = 2000
             settings['enable_power_pellets'] = False
 
         elif stage == 2:
-            # Stage 2 — Evasion Bridge
             settings['enable_ghosts'] = True
             settings['active_ghost_count'] = 1
-            settings['pellets_to_win'] = 20
-            settings['lives'] = 3
+            # PRO-TIP: Set ghost speed to 0.5 for this stage to make it a slow obstacle
+            settings['ghost_speed'] = 0.5
+            settings['pellets_to_win'] = 60
+            settings['max_episode_steps'] = 3000
             settings['enable_power_pellets'] = False
 
         elif stage == 3:
-            # Stage 3 — Hunting Context
+            settings['enable_ghosts'] = True
+            settings['active_ghost_count'] = 1
+            settings['ghost_speed'] = self.base_settings.get('ghost_speed', 2)
+            settings['pellets_to_win'] = 80
+            settings['max_episode_steps'] = 4000
+            settings['enable_power_pellets'] = False
+
+        elif stage == 4:
             settings['enable_ghosts'] = True
             settings['active_ghost_count'] = 2
-            settings['pellets_to_win'] = 20
-            settings['lives'] = 3
+            settings['pellets_to_win'] = 100
             settings['enable_power_pellets'] = True
+            settings['max_episode_steps'] = 5000
 
-        else:  # stage == 4 or higher
-            # Stage 4 — The Gauntlet (fallback for all higher stages)
+        else:  # Stage 5 Mastery
             settings['enable_ghosts'] = True
             settings['active_ghost_count'] = 4
-            settings['pellets_to_win'] = -1
-            settings['lives'] = 3
+            settings['pellets_to_win'] = -1  # Full Clear
             settings['enable_power_pellets'] = True
-            settings['max_episode_steps'] = 6000
+            settings['max_episode_steps'] = 10000
 
         return settings
 
