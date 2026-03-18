@@ -11,7 +11,7 @@
   "god_mode": false,
   "pellets_to_win": -1,
   "scatter_duration": 7,
-  "chase_duration": 30,
+  "chase_duration": 20,
   "always_chase": false,
   "level": 1,
   "ghost_speed_increment": 0.2,

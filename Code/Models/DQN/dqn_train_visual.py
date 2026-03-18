@@ -1,7 +1,7 @@
 """
 dqn_train_visual.py
 ===================
-Egocentric 25-input DQN visual trainer.
+Egocentric 33-input DQN visual trainer.
 """
 
 import sys
@@ -10,6 +10,7 @@ import pygame
 import torch
 import random
 import csv
+import numpy as np
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _ROOT = os.path.dirname(os.path.dirname(os.path.dirname(_HERE)))
@@ -35,7 +36,7 @@ def run_visual_dqn():
     win_w = MAX_WINDOW_W + DASHBOARD_W
     win_h = MAX_WINDOW_H + INFO_BAR_H
     window = pygame.display.set_mode((win_w, win_h))
-    pygame.display.set_caption("DQN Pac-Man — Egocentric 25D")
+    pygame.display.set_caption("DQN Pac-Man — Egocentric 33D")
 
     info_font = pygame.font.Font(None, 28)
     dash_font = pygame.font.Font(None, 22)
@@ -45,8 +46,8 @@ def run_visual_dqn():
     curriculum = CurriculumManager()
     base_settings = curriculum.get_settings()
 
-    env = PacManEnv(render_mode=None, **base_settings)
-    agent = DQNAgent(input_dim=25, output_dim=4)
+    env = PacManEnv(render_mode="rgb_array", **base_settings)
+    agent = DQNAgent(input_dim=33, output_dim=4)
 
     if os.path.exists(SAVE_PATH):
         try:
@@ -59,23 +60,13 @@ def run_visual_dqn():
     batch_size = 64
     episode = 0
 
-    # Ensure CSV log file exists with header
     if not os.path.exists(LOG_PATH):
         with open(LOG_PATH, mode="w", newline="", encoding="utf-8") as f:
             writer = csv.writer(f)
             writer.writerow([
-                "Episode",
-                "Stage",
-                "Maze_Seed",
-                "Reward",
-                "Steps",
-                "Outcome",
-                "Epsilon",
-                "Pellets",
-                "Power_Pellets",
-                "Ghosts",
-                "Explore_Rate",
-                "Avg_Loss",
+                "Episode", "Stage", "Maze_Seed", "Reward", "Steps",
+                "Outcome", "Win", "Epsilon", "Pellets", "Power_Pellets",
+                "Ghosts", "Explore_Rate", "Avg_Loss"
             ])
 
     while True:
@@ -85,13 +76,12 @@ def run_visual_dqn():
         dynamic_seed = random.randint(0, 9999999)
         current_settings['maze_seed'] = dynamic_seed
 
-        # Sync environment telemetry with curriculum stage for logging
-        env.current_stage = getattr(curriculum, "current_stage", None)
-
         env._base_cfg.update(current_settings)
         env.max_episode_steps = current_settings.get('max_episode_steps', 2000)
+        env.current_stage = curriculum.current_stage
 
         state, _ = env.reset(seed=dynamic_seed)
+
         total_reward = 0.0
         loss_history = []
         done = False
@@ -104,15 +94,15 @@ def run_visual_dqn():
                 if event.type == pygame.QUIT or (event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE):
                     print(f"\nSaving weights to {SAVE_PATH}...")
                     torch.save(agent.policy_net.state_dict(), SAVE_PATH)
+                    env.close()
                     pygame.quit()
                     sys.exit()
 
-            # DQN step
             action = agent.select_action(state, valid_actions=[0, 1, 2, 3])
             next_state, reward, terminated, truncated, info = env.step(action)
             done = terminated or truncated
-
             episode_steps += 1
+
             if isinstance(info, dict):
                 last_info = info
                 if "death_cause" in info:
@@ -125,19 +115,34 @@ def run_visual_dqn():
             if loss is not None:
                 loss_history.append(loss)
 
-            # Draw every step for smooth visuals
-            game_surf = pygame.Surface((env.engine.screen_width, env.engine.screen_height))
-            game_surf.fill((0, 0, 0))
-            env.engine.draw(game_surf)
-            window.blit(pygame.transform.scale(game_surf, (MAX_WINDOW_W, MAX_WINDOW_H)), (0, 0))
+            # High-Performance Rendering
+            rgb_array = env.render()
+            if rgb_array is not None:
+                surf = pygame.surfarray.make_surface(np.transpose(rgb_array, (1, 0, 2)))
+                surf = pygame.transform.scale(surf, (MAX_WINDOW_W, MAX_WINDOW_H))
+                window.blit(surf, (0, 0))
 
+            # Dashboard
             window.fill((15, 15, 20), (MAX_WINDOW_W, 0, DASHBOARD_W, win_h))
 
             with torch.no_grad():
-                st_tensor = torch.FloatTensor(state).unsqueeze(0).to(agent.device)
+                st_tensor = torch.tensor(state, dtype=torch.float32).unsqueeze(0).to(agent.device)
                 q_vals = agent.policy_net(st_tensor).squeeze().cpu().numpy()
 
             action_names = ['FORWARD', 'LEFT', 'RIGHT', 'BACKWARD']
+
+            # Decode the 8 egocentric rays from the 33D state vector:
+            # 8 rays * 4 features (wall, food, power, ghost) + 1 frightened scalar.
+            rays = np.array(state, dtype=float).reshape(-1)
+            ray_features = []
+            if rays.shape[0] == 33:
+                ray_features = [
+                    tuple(rays[i*4:(i+1)*4])
+                    for i in range(8)
+                ]
+                frightened_val = float(rays[-1])
+            else:
+                frightened_val = 0.0
 
             y_off = 20
             window.blit(header_font.render("=== DQN LOGIC (EGOCENTRIC) ===", True, (255, 215, 0)), (MAX_WINDOW_W + 15, y_off))
@@ -151,65 +156,73 @@ def run_visual_dqn():
                 window.blit(dash_font.render(f"{name:<7}: {q_vals[i]:+08.3f}", True, (255, 255, 255)), (MAX_WINDOW_W + 15, y_off))
                 y_off += 24
 
-            y_off += 10
-            window.blit(header_font.render("--- Egocentric Rays (W|F|G) ---", True, (255, 215, 0)), (MAX_WINDOW_W + 15, y_off))
-            y_off += 25
-
-            labels = ['F', 'B', 'L', 'R', 'FL', 'FR', 'BL', 'BR']
-            for i, lab in enumerate(labels):
-                w, f, g = state[i*3], state[i*3+1], state[i*3+2]
-                line = f"{lab:<3} | W:{w:6.2f} F:{f:6.2f} G:{g:6.2f}"
-                window.blit(dash_font.render(line, True, (255, 255, 255)), (MAX_WINDOW_W + 15, y_off))
-                y_off += 22
-
-            y_off += 10
-            # Frightened timer observation: 1.0 at start of frightened mode, down to 0.0 as it expires
-            fright_flag = state[24]
-            window.blit(header_font.render(f"Fright timer: {fright_flag:.2f}", True, (255, 105, 180)), (MAX_WINDOW_W + 15, y_off))
+            # Show raycast values beneath Q-values
+            if ray_features:
+                window.blit(header_font.render("--- Egocentric Rays (w,f,p,g) ---", True, (255, 215, 0)), (MAX_WINDOW_W + 15, y_off))
+                y_off += 25
+                for idx, (w_d, f_d, p_d, g_d) in enumerate(ray_features):
+                    label = f"Ray {idx}: W={w_d:+.3f} F={f_d:+.3f} P={p_d:+.3f} G={g_d:+.3f}"
+                    window.blit(dash_font.render(label, True, (200, 200, 200)), (MAX_WINDOW_W + 15, y_off))
+                    y_off += 20
+                # Show frightened scalar at the end
+                window.blit(dash_font.render(f"Frightened: {frightened_val:+.3f}", True, (135, 206, 250)), (MAX_WINDOW_W + 15, y_off))
+                y_off += 24
 
             window.fill((20, 20, 20), (0, MAX_WINDOW_H, MAX_WINDOW_W, INFO_BAR_H))
-            avg_loss = sum(loss_history)/len(loss_history) if loss_history else 0.0
-            info = f"Ep: {episode} | Step: {env._step_count} | Rwd: {total_reward:+.1f} | Eps: {agent.epsilon:.3f} | Loss: {avg_loss:.2f}"
-            window.blit(info_font.render(info, True, (255, 215, 0)), (15, MAX_WINDOW_H + 20))
+            avg_loss_disp = sum(loss_history)/len(loss_history) if loss_history else 0.0
+
+            # Pull current step count from env.info if available, otherwise fall back to local episode_steps
+            steps_disp = episode_steps
+            if isinstance(info, dict):
+                steps_disp = int(info.get("steps", steps_disp))
+
+            info_bar = (
+                f"Ep: {episode} | Stg: {curriculum.current_stage} | "
+                f"Steps: {steps_disp} | Rwd: {total_reward:+.1f} | "
+                f"Eps: {agent.epsilon:.3f} | Loss: {avg_loss_disp:.2f}"
+            )
+            window.blit(info_font.render(info_bar, True, (255, 215, 0)), (15, MAX_WINDOW_H + 20))
 
             pygame.display.flip()
-
             fps_clock.tick(TARGET_FPS)
+
+            # Sync state for next iteration
             state = next_state
 
+        # -------- POST EPISODE --------
         won = env.engine.won
         curriculum.update_performance(won)
-        curriculum.check_promotion()
 
-        # Per-episode logging to CSV
+        # Check Promotion and Demotion
+        promoted = curriculum.check_promotion()
+        demoted = curriculum.check_demotion()
+
+        # Exploration Jolt on Curriculum Change
+        if promoted or demoted:
+            agent.epsilon = max(agent.epsilon, 0.2)
+
         avg_loss = sum(loss_history) / len(loss_history) if loss_history else 0.0
 
-        # Extract telemetry fields from final info dict (fallbacks if missing)
-        stage = last_info.get("stage") if isinstance(last_info, dict) else None
-        maze_seed = last_info.get("maze_seed") if isinstance(last_info, dict) else None
+        stage = curriculum.current_stage
+        maze_seed = dynamic_seed
+
         pellets = int(last_info.get("pellets", 0)) if isinstance(last_info, dict) else 0
         power_pellets = int(last_info.get("power_pellets", 0)) if isinstance(last_info, dict) else 0
         ghosts = int(last_info.get("ghosts", 0)) if isinstance(last_info, dict) else 0
         explore_rate = float(last_info.get("explore_rate", 0.0)) if isinstance(last_info, dict) else 0.0
 
+        outcome = "WIN" if won else last_death_cause
+
         with open(LOG_PATH, mode="a", newline="", encoding="utf-8") as f:
             writer = csv.writer(f)
             writer.writerow([
-                episode,
-                stage,
-                maze_seed,
-                float(total_reward),
-                int(episode_steps),
-                last_death_cause,
-                float(agent.epsilon),
-                pellets,
-                power_pellets,
-                ghosts,
-                explore_rate,
-                float(avg_loss),
+                episode, stage, maze_seed, float(total_reward), int(env._step_count),
+                outcome, int(won), float(agent.epsilon), pellets, power_pellets,
+                ghosts, explore_rate, float(avg_loss)
             ])
 
         agent.update_target_network()
+
         if episode % 50 == 0:
             torch.save(agent.policy_net.state_dict(), SAVE_PATH)
 

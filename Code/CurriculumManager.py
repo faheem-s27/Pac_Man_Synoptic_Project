@@ -73,10 +73,10 @@ class CurriculumManager:
             settings['max_episode_steps'] = 4000
             settings['enable_power_pellets'] = False
 
-        # ---------- STAGE 2: Map Mastery (FIXED) ----------
+        # ---------- STAGE 2: Map Mastery ----------
         elif stage == 2:
             settings['enable_ghosts'] = False
-            settings['pellets_to_win'] = 200   # NOT full clear anymore
+            settings['pellets_to_win'] = 200
             settings['max_episode_steps'] = 8000
             settings['enable_power_pellets'] = False
 
@@ -84,7 +84,7 @@ class CurriculumManager:
         elif stage == 3:
             settings['enable_ghosts'] = True
             settings['active_ghost_count'] = 1
-            settings['ghost_speed'] = 1  # slow but real movement
+            settings['ghost_speed'] = 1
             settings['pellets_to_win'] = 100
             settings['max_episode_steps'] = 6000
             settings['enable_power_pellets'] = False
@@ -96,7 +96,7 @@ class CurriculumManager:
             settings['ghost_speed'] = self.base_settings.get('ghost_speed', 2)
             settings['scatter_duration'] = 7
             settings['chase_duration'] = 20
-            settings['pellets_to_win'] = 120  # encourage power pellet usage
+            settings['pellets_to_win'] = 120
             settings['enable_power_pellets'] = True
             settings['max_episode_steps'] = 8000
 

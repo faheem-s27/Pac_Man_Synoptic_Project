@@ -6,21 +6,24 @@ import numpy as np
 import random
 from collections import deque
 
+
 class QNetwork(nn.Module):
-    """Simple 25->64->64->4 MLP for egocentric raycasts (4 actions)."""
-    def __init__(self, input_dim: int = 25, output_dim: int = 4):
+    """Upgraded 33->128->128->4 MLP for egocentric raycasts."""
+
+    def __init__(self, input_dim: int = 33, output_dim: int = 4):
         super(QNetwork, self).__init__()
-        self.fc1 = nn.Linear(input_dim, 64)
-        self.fc2 = nn.Linear(64, 64)
-        self.fc3 = nn.Linear(64, output_dim)
+        self.fc1 = nn.Linear(input_dim, 128)
+        self.fc2 = nn.Linear(128, 128)
+        self.fc3 = nn.Linear(128, output_dim)
 
     def forward(self, state: torch.Tensor) -> torch.Tensor:
         x = F.relu(self.fc1(state))
         x = F.relu(self.fc2(x))
         return self.fc3(x)
 
+
 class ReplayBuffer:
-    def __init__(self, capacity=100_000):
+    def __init__(self, capacity=200_000):
         self.buffer = deque(maxlen=capacity)
 
     def push(self, state, action, reward, next_state, done):
@@ -40,8 +43,9 @@ class ReplayBuffer:
     def __len__(self):
         return len(self.buffer)
 
+
 class DQNAgent:
-    def __init__(self, input_dim: int = 25, output_dim: int = 4, lr: float = 1e-4, gamma: float = 0.99,
+    def __init__(self, input_dim: int = 33, output_dim: int = 4, lr: float = 1e-4, gamma: float = 0.99,
                  epsilon_start: float = 1.0, epsilon_end: float = 0.05, epsilon_decay: int = 1_000_000):
         self.action_dim = output_dim
         self.gamma = gamma
@@ -58,10 +62,11 @@ class DQNAgent:
         self.target_net.eval()
 
         self.optimizer = optim.Adam(self.policy_net.parameters(), lr=lr)
-        self.memory = ReplayBuffer()
+        self.memory = ReplayBuffer(capacity=200_000)
 
     def select_action(self, state, valid_actions=None) -> int:
         self.step_count += 1
+        # Linear decay mapping steps directly to epsilon drop
         self.epsilon = max(self.epsilon_end, self.epsilon - (1.0 / self.epsilon_decay))
         candidate_actions = valid_actions if valid_actions else list(range(self.action_dim))
 
@@ -87,17 +92,26 @@ class DQNAgent:
         next_state_tensor = torch.FloatTensor(next_state_batch).to(self.device)
         done_tensor = torch.FloatTensor(done_batch).to(self.device)
 
+        # Current Q
         current_q_values = self.policy_net(state_tensor).gather(1, action_tensor).squeeze(1)
 
+        # -------- DOUBLE DQN --------
         with torch.no_grad():
-            max_next_q_values = self.target_net(next_state_tensor).max(1)[0]
-            expected_q_values = reward_tensor + (self.gamma * max_next_q_values * (1 - done_tensor))
+            # Use policy network to select the best next action
+            next_actions = self.policy_net(next_state_tensor).argmax(1, keepdim=True)
+            # Use target network to evaluate that action
+            next_q_values = self.target_net(next_state_tensor).gather(1, next_actions).squeeze(1)
+            expected_q_values = reward_tensor + (self.gamma * next_q_values * (1 - done_tensor))
 
-        loss = F.mse_loss(current_q_values, expected_q_values)
+        # -------- HUBER LOSS --------
+        loss = F.smooth_l1_loss(current_q_values, expected_q_values)
 
         self.optimizer.zero_grad()
         loss.backward()
-        torch.nn.utils.clip_grad_value_(self.policy_net.parameters(), 100)
+
+        # -------- GRADIENT CLIPPING --------
+        torch.nn.utils.clip_grad_norm_(self.policy_net.parameters(), 10)
+
         self.optimizer.step()
 
         return loss.item()

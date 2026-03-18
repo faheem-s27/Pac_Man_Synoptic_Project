@@ -13,8 +13,11 @@ class PacMan:
         self.tile_size = tile_size
         self.size = tile_size
         self.speed = speed
-        self.direction = (0, 0)
+
+        # ✅ FIX 1: Start with a valid movement direction
+        self.direction = (1, 0)  # RIGHT
         self.next_direction = (0, 0)
+
         self.color = (255, 255, 0)
         self.score = 0
         self.pellets_eaten = 0
@@ -25,10 +28,9 @@ class PacMan:
         self.pacman_images = {}
         self.animation_counter = 0
         self.last_facing_direction = "right"
-        self._images_loaded = False  # Images are loaded lazily on first draw()
+        self._images_loaded = False
 
     def _load_pacman_images(self):
-        """Load directional GIF images for Pac-Man and extract all frames."""
         directions = ["up", "down", "left", "right"]
         images_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "Images"))
 
@@ -44,7 +46,9 @@ class PacMan:
                         pil_image.seek(frame_index)
                         frame = pil_image.convert("RGBA")
                         frame_data = pygame.image.fromstring(frame.tobytes(), frame.size, "RGBA")
-                        frame_scaled = pygame.transform.scale(frame_data, (self.render_size, self.render_size))
+                        frame_scaled = pygame.transform.scale(
+                            frame_data, (self.render_size, self.render_size)
+                        )
                         frames.append(frame_scaled)
                         frame_index += 1
                     except EOFError:
@@ -52,11 +56,10 @@ class PacMan:
 
                 if frames:
                     self.pacman_images[direction] = frames
-                    #print(f"Loaded {len(frames)} frames for Pac-Man {direction} animation")
-            except Exception as e:
-                print(f"Note: Could not load Pac-Man {direction} GIF: {e}")
+            except Exception:
+                pass
 
-        self._images_loaded = True  # Mark attempted regardless of success
+        self._images_loaded = True
 
     def _get_current_direction_name(self):
         dx, dy = self.direction
@@ -75,51 +78,53 @@ class PacMan:
     def is_aligned_to_tile(self):
         center_x = self.x + self.size // 2
         center_y = self.y + self.size // 2
+
         tile_offset_x = center_x % self.tile_size
         tile_offset_y = center_y % self.tile_size
 
-        # Tolerance must be at least as large as speed so we never overshoot without triggering
-        tolerance = max(self.speed, self.tile_size // 10, 3)
+        half = self.tile_size // 2
+        tolerance = max(1, min(self.speed, half))
 
-        return (abs(tile_offset_x - self.tile_size // 2) < tolerance and
-                abs(tile_offset_y - self.tile_size // 2) < tolerance)
+        return (
+            abs(tile_offset_x - half) <= tolerance
+            and abs(tile_offset_y - half) <= tolerance
+        )
 
     def _snap_to_axis(self):
-        """Snap Pac-Man's position along the non-moving axis to the nearest tile centre.
-        This prevents sub-pixel drift that blocks turns at non-divisible speeds."""
         dx, dy = self.direction
         half = self.tile_size // 2
 
-        if dx != 0:  # Moving horizontally — snap Y to tile centre
+        if dx != 0:
             center_y = self.y + self.size // 2
             snapped_tile_y = (center_y // self.tile_size) * self.tile_size + half
             self.y = snapped_tile_y - self.size // 2
 
-        elif dy != 0:  # Moving vertically — snap X to tile centre
+        elif dy != 0:
             center_x = self.x + self.size // 2
             snapped_tile_x = (center_x // self.tile_size) * self.tile_size + half
             self.x = snapped_tile_x - self.size // 2
 
     def set_direction(self, direction):
-        """Allow direction changes more freely - don't require perfect tile alignment"""
-        # Always allow storing the next direction
-        # The update() method will apply it when safe
+        # Keep simple — engine handles validity
         self.next_direction = direction
 
     def update(self, maze):
         self.animation_counter += 1
 
         if self.next_direction != (0, 0):
-            is_reverse = (self.next_direction[0] == -self.direction[0] and
-                          self.next_direction[1] == -self.direction[1])
+            is_reverse = (
+                self.next_direction[0] == -self.direction[0]
+                and self.next_direction[1] == -self.direction[1]
+            )
 
             if is_reverse:
-                # Reverse direction instantly — no tile alignment needed
                 self.direction = self.next_direction
                 self.next_direction = (0, 0)
-            elif self.is_aligned_to_tile():
-                # Snap to the tile centre first so the move check is clean
+
+            # ✅ FIX 2: Allow turning when stationary
+            elif self.is_aligned_to_tile() or self.direction == (0, 0):
                 self._snap_to_axis()
+
                 next_x = self.x + self.next_direction[0] * self.speed
                 next_y = self.y + self.next_direction[1] * self.speed
 
@@ -127,56 +132,63 @@ class PacMan:
                     self.direction = self.next_direction
                     self.next_direction = (0, 0)
 
-        # Move — but clamp each step so we never overshoot a tile centre
         dx, dy = self.direction
+
         if dx != 0:
-            # Moving horizontally: advance X, keep Y snapped
             next_x = self.x + dx * self.speed
             next_y = self.y
-            tile_half = self.tile_size // 2
+
             if maze.can_move(next_x, next_y, self.size):
-                # Clamp: don't overshoot the next tile centre
                 center_x = self.x + self.size // 2
                 next_center_x = next_x + self.size // 2
-                tile_half = self.tile_size // 2
+                half = self.tile_size // 2
+
                 cur_offset = center_x % self.tile_size
                 nxt_offset = next_center_x % self.tile_size
-                # If we crossed the tile-centre boundary, snap to it
-                if (cur_offset < tile_half <= nxt_offset) or (cur_offset > tile_half >= nxt_offset):
-                    snapped = (center_x // self.tile_size) * self.tile_size + tile_half
+
+                if (cur_offset < half <= nxt_offset) or (cur_offset > half >= nxt_offset):
+                    snapped = (center_x // self.tile_size) * self.tile_size + half
                     if abs(next_center_x - snapped) <= self.speed:
                         next_x = snapped - self.size // 2
+
                 self.x = next_x
             else:
-                # Snap to the tile centre so we sit flush against the wall
                 center_x = self.x + self.size // 2
-                snapped = (center_x // self.tile_size) * self.tile_size + tile_half
+                snapped = (center_x // self.tile_size) * self.tile_size + (self.tile_size // 2)
                 self.x = snapped - self.size // 2
 
         elif dy != 0:
-            # Moving vertically: advance Y, keep X snapped
             next_x = self.x
             next_y = self.y + dy * self.speed
+
             if maze.can_move(next_x, next_y, self.size):
-                # Clamp: don't overshoot the next tile centre
                 center_y = self.y + self.size // 2
                 next_center_y = next_y + self.size // 2
-                tile_half = self.tile_size // 2
+                half = self.tile_size // 2
+
                 cur_offset = center_y % self.tile_size
                 nxt_offset = next_center_y % self.tile_size
-                if (cur_offset < tile_half <= nxt_offset) or (cur_offset > tile_half >= nxt_offset):
-                    snapped = (center_y // self.tile_size) * self.tile_size + tile_half
+
+                if (cur_offset < half <= nxt_offset) or (cur_offset > half >= nxt_offset):
+                    snapped = (center_y // self.tile_size) * self.tile_size + half
                     if abs(next_center_y - snapped) <= self.speed:
                         next_y = snapped - self.size // 2
+
                 self.y = next_y
             else:
-                # Snap to the tile centre so we sit flush against the wall
                 center_y = self.y + self.size // 2
-                tile_half = self.tile_size // 2
-                snapped = (center_y // self.tile_size) * self.tile_size + tile_half
+                snapped = (center_y // self.tile_size) * self.tile_size + (self.tile_size // 2)
                 self.y = snapped - self.size // 2
 
-        # Handle teleportation at maze edges
+        # ✅ FIX 3: Fallback movement (prevents deadlock)
+        if self.direction == (0, 0):
+            for d in [(1, 0), (-1, 0), (0, 1), (0, -1)]:
+                nx = self.x + d[0] * self.speed
+                ny = self.y + d[1] * self.speed
+                if maze.can_move(nx, ny, self.size):
+                    self.direction = d
+                    break
+
         self.x, self.y = maze.handle_teleportation(self.x, self.y)
 
     def draw(self, surface):
@@ -195,12 +207,19 @@ class PacMan:
                 surface.blit(image, (self.x + self.render_offset, self.y + self.render_offset))
                 return
 
-        pygame.draw.circle(surface, self.color, (int(center_x), int(center_y)), self.render_size // 3)
+        pygame.draw.circle(
+            surface,
+            self.color,
+            (int(center_x), int(center_y)),
+            self.render_size // 3,
+        )
 
     def get_grid_position(self):
-        return self.x // self.tile_size, self.y // self.tile_size
+        # ✅ FIX 4: Use centre, not top-left
+        center_x = self.x + self.size // 2
+        center_y = self.y + self.size // 2
+        return center_x // self.tile_size, center_y // self.tile_size
 
     def eat_pellet(self, points=10):
         self.score += points
         self.pellets_eaten += 1
-
