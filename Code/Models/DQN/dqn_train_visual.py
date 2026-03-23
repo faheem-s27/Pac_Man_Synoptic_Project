@@ -195,7 +195,10 @@ def run_visual_dqn():
 
         # Check Promotion and Demotion
         promoted = curriculum.check_promotion()
-        demoted = curriculum.check_demotion()
+
+        # -- DISABLE DEMOTION
+        #demoted = curriculum.check_demotion()
+        demoted = False
 
         # Exploration Jolt on Curriculum Change
         if promoted or demoted:
