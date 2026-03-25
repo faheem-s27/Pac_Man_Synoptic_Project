@@ -1,6 +1,5 @@
 import json
 import os
-from pathlib import Path
 
 class Settings:
     """Manages game settings and persists them to a JSON file."""
@@ -23,8 +22,41 @@ class Settings:
         "always_chase": False,
         "level": 1,
         "ghost_speed_increment": 0.1,
-        "enable_power_pellets": True
+        "enable_power_pellets": True,
+        "blinky_active": True,
+        "pinky_active": True,
+        "inky_active": True,
+        "clyde_active": True
     }
+
+    @staticmethod
+    def _apply_ghost_activation_migration(settings: dict) -> dict:
+        """Normalize per-ghost toggles and migrate legacy active_ghost_count if present."""
+        has_new_keys = any(
+            key in settings
+            for key in ("blinky_active", "pinky_active", "inky_active", "clyde_active")
+        )
+
+        if not has_new_keys and "active_ghost_count" in settings:
+            try:
+                count = int(settings.get("active_ghost_count", 4))
+            except Exception:
+                count = 4
+            settings["blinky_active"] = count > 0
+            settings["pinky_active"] = count > 1
+            settings["inky_active"] = count > 2
+            settings["clyde_active"] = count > 3
+
+        settings["blinky_active"] = bool(settings.get("blinky_active", True))
+        settings["pinky_active"] = bool(settings.get("pinky_active", True))
+        settings["inky_active"] = bool(settings.get("inky_active", True))
+        settings["clyde_active"] = bool(settings.get("clyde_active", True))
+
+        # Keep a derived count for any still-legacy consumers.
+        settings["active_ghost_count"] = int(
+            settings["blinky_active"]
+        ) + int(settings["pinky_active"]) + int(settings["inky_active"]) + int(settings["clyde_active"])
+        return settings
 
     def __init__(self, settings_file="game_settings.json"):
         self.settings_file = settings_file
@@ -39,11 +71,11 @@ class Settings:
                     # Merge with defaults to ensure all keys exist
                     settings = self.DEFAULT_SETTINGS.copy()
                     settings.update(loaded)
-                    return settings
+                    return self._apply_ghost_activation_migration(settings)
             except Exception as e:
                 print(f"Error loading settings: {e}. Using defaults.")
 
-        return self.DEFAULT_SETTINGS.copy()
+        return self._apply_ghost_activation_migration(self.DEFAULT_SETTINGS.copy())
 
     def save_settings(self):
         """Save current settings to file."""
@@ -68,6 +100,6 @@ class Settings:
 
     def reset_to_defaults(self):
         """Reset all settings to defaults."""
-        self.settings = self.DEFAULT_SETTINGS.copy()
+        self.settings = self._apply_ghost_activation_migration(self.DEFAULT_SETTINGS.copy())
         self.save_settings()
 

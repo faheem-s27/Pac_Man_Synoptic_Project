@@ -6,7 +6,7 @@
   "maze_algorithm": "recursive_backtracking",
   "maze_seed": "",
   "enable_ghosts": true,
-  "enable_sound": false,
+  "enable_sound": true,
   "lives": 1,
   "god_mode": false,
   "pellets_to_win": -1,
@@ -15,5 +15,9 @@
   "always_chase": false,
   "level": 1,
   "ghost_speed_increment": 0.2,
-  "enable_power_pellets": true
+  "enable_power_pellets": true,
+  "blinky_active": true,
+  "pinky_active": true,
+  "inky_active": true,
+  "clyde_active": true
 }

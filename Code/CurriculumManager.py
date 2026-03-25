@@ -62,6 +62,10 @@ class CurriculumManager:
         # ---------- STAGE 0: Tutorial ----------
         if stage == 0:
             settings['enable_ghosts'] = False
+            settings['blinky_active'] = False
+            settings['pinky_active'] = False
+            settings['inky_active'] = False
+            settings['clyde_active'] = False
             settings['pellets_to_win'] = 20
             settings['max_episode_steps'] = 1000
             settings['enable_power_pellets'] = False
@@ -69,6 +73,10 @@ class CurriculumManager:
         # ---------- STAGE 1: Expansion ----------
         elif stage == 1:
             settings['enable_ghosts'] = False
+            settings['blinky_active'] = False
+            settings['pinky_active'] = False
+            settings['inky_active'] = False
+            settings['clyde_active'] = False
             settings['pellets_to_win'] = 80
             settings['max_episode_steps'] = 4000
             settings['enable_power_pellets'] = False
@@ -76,6 +84,10 @@ class CurriculumManager:
         # ---------- STAGE 2: Map Mastery ----------
         elif stage == 2:
             settings['enable_ghosts'] = False
+            settings['blinky_active'] = False
+            settings['pinky_active'] = False
+            settings['inky_active'] = False
+            settings['clyde_active'] = False
             settings['pellets_to_win'] = 200
             settings['max_episode_steps'] = 8000
             settings['enable_power_pellets'] = False
@@ -83,7 +95,10 @@ class CurriculumManager:
         # ---------- STAGE 3: Ghost Intro ----------
         elif stage == 3:
             settings['enable_ghosts'] = True
-            settings['active_ghost_count'] = 1
+            settings['blinky_active'] = True
+            settings['pinky_active'] = False
+            settings['inky_active'] = False
+            settings['clyde_active'] = False
             settings['ghost_speed'] = 1
             settings['pellets_to_win'] = 100
             settings['max_episode_steps'] = 6000
@@ -92,7 +107,10 @@ class CurriculumManager:
         # ---------- STAGE 4: First Hunt ----------
         elif stage == 4:
             settings['enable_ghosts'] = True
-            settings['active_ghost_count'] = 2
+            settings['blinky_active'] = True
+            settings['pinky_active'] = True
+            settings['inky_active'] = False
+            settings['clyde_active'] = False
             settings['ghost_speed'] = self.base_settings.get('ghost_speed', 2)
             settings['scatter_duration'] = 7
             settings['chase_duration'] = 20
@@ -103,7 +121,10 @@ class CurriculumManager:
         # ---------- STAGE 5: Final ----------
         else:
             settings['enable_ghosts'] = True
-            settings['active_ghost_count'] = 4
+            settings['blinky_active'] = True
+            settings['pinky_active'] = True
+            settings['inky_active'] = True
+            settings['clyde_active'] = True
             settings['ghost_speed'] = self.base_settings.get('ghost_speed', 2) + 0.5
             settings['pellets_to_win'] = -1  # full clear
             settings['enable_power_pellets'] = True

@@ -33,7 +33,11 @@ class GameEngine:
                  maze_seed=None,
                  enable_sound=True,
                  enable_power_pellets=True,
-                 active_ghost_count=4,
+                 active_ghost_count=None,
+                 blinky_active=None,
+                 pinky_active=None,
+                 inky_active=None,
+                 clyde_active=None,
                  **kwargs):
         # Parse resolution string if provided
         if isinstance(window_resolution, str):
@@ -45,7 +49,11 @@ class GameEngine:
         self.screen_height = screen_height
         self.tile_size = tile_size
         self.enable_ghosts = enable_ghosts
-        self.active_ghost_count = active_ghost_count  # Store it for later use
+        self.blinky_active = bool(blinky_active) if blinky_active is not None else None
+        self.pinky_active = bool(pinky_active) if pinky_active is not None else None
+        self.inky_active = bool(inky_active) if inky_active is not None else None
+        self.clyde_active = bool(clyde_active) if clyde_active is not None else None
+        self._resolve_ghost_activation(active_ghost_count)
         self.god_mode = god_mode
         self.enable_power_pellets = enable_power_pellets
         self.max_pellets = max_pellets  # legacy, unused — kept for **kwargs safety
@@ -168,6 +176,51 @@ class GameEngine:
                 #print(f"Audio Warning (eat ghost): {e}")
                 pass
 
+    def _resolve_ghost_activation(self, active_ghost_count):
+        """Resolve new per-ghost toggles and keep legacy count behavior as fallback."""
+        if all(v is None for v in (self.blinky_active, self.pinky_active, self.inky_active, self.clyde_active)):
+            try:
+                count = 4 if active_ghost_count is None else int(active_ghost_count)
+            except Exception:
+                count = 4
+            self.blinky_active = count > 0
+            self.pinky_active = count > 1
+            self.inky_active = count > 2
+            self.clyde_active = count > 3
+        else:
+            self.blinky_active = True if self.blinky_active is None else self.blinky_active
+            self.pinky_active = True if self.pinky_active is None else self.pinky_active
+            self.inky_active = True if self.inky_active is None else self.inky_active
+            self.clyde_active = True if self.clyde_active is None else self.clyde_active
+
+        self.active_ghost_count = (
+            int(self.blinky_active)
+            + int(self.pinky_active)
+            + int(self.inky_active)
+            + int(self.clyde_active)
+        )
+
+    def _ghost_spawn_points(self):
+        """Return spawn points keyed by ghost name for consistent resets with partial rosters."""
+        ts = self.tile_size
+        m = self.maze
+        interior_py = float((m.cage_top + 1) * ts)
+        interior_centre_x = (m.cage_left + m.cage_right) // 2
+        return {
+            "Blinky": (float(m.door_x * ts), float((m.cage_top - 1) * ts)),
+            "Pinky": (float(interior_centre_x * ts), interior_py),
+            "Inky": (float((interior_centre_x - 1) * ts), interior_py),
+            "Clyde": (float((interior_centre_x + 1) * ts), interior_py),
+        }
+
+    def _reset_ghost_spawn_positions(self):
+        """Reset each active ghost to its canonical spawn position by name."""
+        spawn_points = self._ghost_spawn_points()
+        for ghost in self.ghosts:
+            if ghost.name in spawn_points:
+                ghost.x, ghost.y = spawn_points[ghost.name]
+            ghost.reset_spawn()
+
     def unpause(self):
         self.paused = False
 
@@ -206,32 +259,10 @@ class GameEngine:
         self.pacman.next_direction = (0, 0)
 
         if self.enable_ghosts:
-            ts = self.tile_size
-            m  = self.maze
-            interior_py = (m.cage_top + 1) * ts
-            interior_centre_x = (m.cage_left + m.cage_right) // 2
-            blinky_px = float(m.door_x * ts)
-            blinky_py = float((m.cage_top - 1) * ts)
-
             for ghost in self.ghosts:
                 ghost.maze = self.maze
                 ghost.pathfinding = Pathfinding(self.maze)
-            if len(self.ghosts) > 0:
-                self.ghosts[0].x = blinky_px
-                self.ghosts[0].y = blinky_py
-                self.ghosts[0].reset_spawn()
-            if len(self.ghosts) > 1:
-                self.ghosts[1].x = float(interior_centre_x * ts)
-                self.ghosts[1].y = float(interior_py)
-                self.ghosts[1].reset_spawn()
-            if len(self.ghosts) > 2:
-                self.ghosts[2].x = float((interior_centre_x - 1) * ts)
-                self.ghosts[2].y = float(interior_py)
-                self.ghosts[2].reset_spawn()
-            if len(self.ghosts) > 3:
-                self.ghosts[3].x = float((interior_centre_x + 1) * ts)
-                self.ghosts[3].y = float(interior_py)
-                self.ghosts[3].reset_spawn()
+            self._reset_ghost_spawn_positions()
             self._sync_ghost_modes()
 
         self.pathfinding = Pathfinding(self.maze)
@@ -248,31 +279,7 @@ class GameEngine:
         self.global_scatter_mode = False if self.always_chase else True
 
         if self.enable_ghosts:
-            ts = self.tile_size
-            m  = self.maze
-            interior_py = (m.cage_top + 1) * ts
-            interior_centre_x = (m.cage_left + m.cage_right) // 2
-
-            if len(self.ghosts) > 0:
-                # Reset Blinky — above door
-                self.ghosts[0].x = float(m.door_x * ts)
-                self.ghosts[0].y = float((m.cage_top - 1) * ts)
-                self.ghosts[0].reset_spawn()
-            if len(self.ghosts) > 1:
-                # Reset Pinky — cage interior centre
-                self.ghosts[1].x = float(interior_centre_x * ts)
-                self.ghosts[1].y = float(interior_py)
-                self.ghosts[1].reset_spawn()
-            if len(self.ghosts) > 2:
-                # Reset Inky — left of centre
-                self.ghosts[2].x = float((interior_centre_x - 1) * ts)
-                self.ghosts[2].y = float(interior_py)
-                self.ghosts[2].reset_spawn()
-            if len(self.ghosts) > 3:
-                # Reset Clyde — right of centre
-                self.ghosts[3].x = float((interior_centre_x + 1) * ts)
-                self.ghosts[3].y = float(interior_py)
-                self.ghosts[3].reset_spawn()
+            self._reset_ghost_spawn_positions()
             self._sync_ghost_modes()  # Reapply always_chase / scatter mode after reset
 
     def _sync_ghost_modes(self):
@@ -319,9 +326,10 @@ class GameEngine:
         # Return-to-cage target: interior centre
         cage_home_px = interior_centre_x * ts
         cage_home_py = interior_py
+        blinky = None
 
         # Blinky (Red) — spawns immediately, starts above cage
-        if self.active_ghost_count > 0:
+        if self.blinky_active:
             blinky = Ghost(blinky_px, blinky_py, ts, speed=self.ghost_speed, maze=self.maze, name="Blinky")
             blinky.color     = (255, 0, 0)
             blinky.spawn_delay = 0
@@ -330,7 +338,7 @@ class GameEngine:
             self.ghosts.append(blinky)
 
         # Pinky (Pink) — centre of cage interior
-        if self.active_ghost_count > 1:
+        if self.pinky_active:
             pinky = Pinky(pinky_px, interior_py, ts, speed=self.ghost_speed, maze=self.maze, name="Pinky")
             pinky.color      = (255, 184, 255)
             pinky.spawn_delay = 5 * 60
@@ -339,7 +347,7 @@ class GameEngine:
             self.ghosts.append(pinky)
 
         # Inky (Cyan) — left of centre
-        if self.active_ghost_count > 2:
+        if self.inky_active:
             inky = Inky(inky_px, interior_py, ts, speed=self.ghost_speed, maze=self.maze, name="Inky", blinky=blinky)
             inky.color       = (0, 255, 255)
             inky.spawn_delay = 10 * 60
@@ -348,7 +356,7 @@ class GameEngine:
             self.ghosts.append(inky)
 
         # Clyde (Orange) — right of centre
-        if self.active_ghost_count > 3:
+        if self.clyde_active:
             clyde = Clyde(clyde_px, interior_py, ts, speed=self.ghost_speed, maze=self.maze, name="Clyde")
             clyde.color      = (255, 184, 82)
             clyde.spawn_delay = 15 * 60
