@@ -179,16 +179,19 @@ class Ghost:
 
     def enter_frightened_mode(self):
         """Enter frightened mode when power pellet is eaten."""
-        if self.state != GhostState.SPAWNING:
-            self.previous_state = self.state
-            self.state = GhostState.FRIGHTENED
-            self.original_color = self.color
-            self.color = (0, 0, 255)  # Turn blue
-            self.path = []  # Clear current path
-            # Reverse direction (180-degree turn)
-            self.current_dir = (-self.current_dir[0], -self.current_dir[1])
-            # Halve the speed
-            self.speed = self.original_speed / 2
+        # EATEN ghosts must keep returning home and never switch to frightened.
+        if self.state in (GhostState.SPAWNING, GhostState.EATEN):
+            return
+
+        self.previous_state = self.state
+        self.state = GhostState.FRIGHTENED
+        self.original_color = self.color
+        self.color = (0, 0, 255)  # Turn blue
+        self.path = []  # Clear current path
+        # Reverse direction (180-degree turn)
+        self.current_dir = (-self.current_dir[0], -self.current_dir[1])
+        # Halve the speed
+        self.speed = self.original_speed / 2
 
     def exit_frightened_mode(self):
         """Exit frightened mode and return to previous behavior."""

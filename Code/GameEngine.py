@@ -716,7 +716,8 @@ class GameEngine:
 
                     # Set all spawned ghosts to frightened state
                     for ghost in self.ghosts:
-                        if ghost.is_spawned and ghost.state != GhostState.SPAWNING:
+                        # EATEN ghosts should continue returning to cage.
+                        if ghost.is_spawned and ghost.state not in (GhostState.SPAWNING, GhostState.EATEN):
                             ghost.enter_frightened_mode()
                 else:
                     # Already in frightened mode - extend the duration
@@ -725,7 +726,7 @@ class GameEngine:
 
                     # Only frighten ghosts that aren't already frightened or spawning
                     for ghost in self.ghosts:
-                        if ghost.is_spawned and ghost.state != GhostState.FRIGHTENED and ghost.state != GhostState.SPAWNING:
+                        if ghost.is_spawned and ghost.state not in (GhostState.FRIGHTENED, GhostState.SPAWNING, GhostState.EATEN):
                             ghost.enter_frightened_mode()
 
         for i in reversed(power_pellets_to_remove):
