@@ -15,7 +15,7 @@ from dqn_agent import QNetwork
 
 
 def evaluate_model(model_path, episodes=3):
-    """Visual evaluation for the 25-dim egocentric DQN (4 actions)."""
+    """Visual evaluation for the 35-dim egocentric DQN (4 actions)."""
     pygame.init()
     fps_clock = pygame.time.Clock()
     TARGET_FPS = 10
@@ -25,13 +25,13 @@ def evaluate_model(model_path, episodes=3):
     win_w = env.engine.screen_width
     win_h = env.engine.screen_height + 60
     screen = pygame.display.set_mode((win_w, win_h))
-    pygame.display.set_caption("DQN Evaluation — Egocentric 25D")
+    pygame.display.set_caption("DQN Evaluation — Egocentric 35D")
 
     info_font = pygame.font.Font(None, 28)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    # 25-dim in, 4 egocentric actions out
-    policy_net = QNetwork(input_dim=25, output_dim=4).to(device)
+    # 35-dim in, 4 egocentric actions out
+    policy_net = QNetwork(input_dim=35, output_dim=4).to(device)
     policy_net.load_state_dict(torch.load(model_path, map_location=device, weights_only=True))
     policy_net.eval()
 

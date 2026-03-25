@@ -8,9 +8,9 @@ from collections import deque
 
 
 class QNetwork(nn.Module):
-    """Upgraded 33->128->128->4 MLP for egocentric raycasts."""
+    """35->128->128->4 MLP for egocentric raycasts + normalized position."""
 
-    def __init__(self, input_dim: int = 33, output_dim: int = 4):
+    def __init__(self, input_dim: int = 35, output_dim: int = 4):
         super(QNetwork, self).__init__()
         self.fc1 = nn.Linear(input_dim, 128)
         self.fc2 = nn.Linear(128, 128)
@@ -45,7 +45,7 @@ class ReplayBuffer:
 
 
 class DQNAgent:
-    def __init__(self, input_dim: int = 33, output_dim: int = 4, lr: float = 1e-4, gamma: float = 0.99,
+    def __init__(self, input_dim: int = 35, output_dim: int = 4, lr: float = 1e-4, gamma: float = 0.99,
                  epsilon_start: float = 1.0, epsilon_end: float = 0.05, epsilon_decay: int = 1_000_000):
         self.action_dim = output_dim
         self.gamma = gamma
@@ -66,8 +66,10 @@ class DQNAgent:
 
     def select_action(self, state, valid_actions=None) -> int:
         self.step_count += 1
-        # Linear decay mapping steps directly to epsilon drop
-        self.epsilon = max(self.epsilon_end, self.epsilon - (1.0 / self.epsilon_decay))
+        # Exponential decay: fast early exploration, smoother long-term convergence.
+        self.epsilon = self.epsilon_end + (1.0 - self.epsilon_end) * np.exp(
+            -1.0 * self.step_count / self.epsilon_decay
+        )
         candidate_actions = valid_actions if valid_actions else list(range(self.action_dim))
 
         if random.random() < self.epsilon:
@@ -81,7 +83,7 @@ class DQNAgent:
                 masked_q[a] = q_values[a]
             return masked_q.argmax().item()
 
-    def optimize_model(self, batch_size: int = 64):
+    def optimize_model(self, batch_size: int = 128):
         if len(self.memory) < batch_size:
             return None
 

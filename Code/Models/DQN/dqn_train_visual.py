@@ -1,7 +1,7 @@
 """
 dqn_train_visual.py
 ===================
-Egocentric 33-input DQN visual trainer.
+Egocentric 35-input DQN visual trainer.
 """
 
 import sys
@@ -36,7 +36,7 @@ def run_visual_dqn():
     win_w = MAX_WINDOW_W + DASHBOARD_W
     win_h = MAX_WINDOW_H + INFO_BAR_H
     window = pygame.display.set_mode((win_w, win_h))
-    pygame.display.set_caption("DQN Pac-Man — Egocentric 33D")
+    pygame.display.set_caption("DQN Pac-Man — Egocentric 35D")
 
     info_font = pygame.font.Font(None, 28)
     dash_font = pygame.font.Font(None, 22)
@@ -47,7 +47,7 @@ def run_visual_dqn():
     base_settings = curriculum.get_settings()
 
     env = PacManEnv(render_mode="rgb_array", **base_settings)
-    agent = DQNAgent(input_dim=33, output_dim=4)
+    agent = DQNAgent(input_dim=35, output_dim=4)
 
     if os.path.exists(SAVE_PATH):
         try:
@@ -57,7 +57,7 @@ def run_visual_dqn():
         except Exception as e:
             print(f"Failed to load weights. Starting fresh. Error: {e}")
 
-    batch_size = 64
+    batch_size = 128
     episode = 0
 
     if not os.path.exists(LOG_PATH):
@@ -131,11 +131,21 @@ def run_visual_dqn():
 
             action_names = ['FORWARD', 'LEFT', 'RIGHT', 'BACKWARD']
 
-            # Decode the 8 egocentric rays from the 33D state vector:
-            # 8 rays * 4 features (wall, food, power, ghost) + 1 frightened scalar.
+            # Decode 35D state: 8 rays*4 + frightened + norm_x + norm_y.
             rays = np.array(state, dtype=float).reshape(-1)
             ray_features = []
-            if rays.shape[0] == 33:
+            norm_x = 0.0
+            norm_y = 0.0
+            if rays.shape[0] >= 35:
+                ray_features = [
+                    tuple(rays[i*4:(i+1)*4])
+                    for i in range(8)
+                ]
+                frightened_val = float(rays[32])
+                norm_x = float(rays[33])
+                norm_y = float(rays[34])
+            elif rays.shape[0] == 33:
+                # Backward compatibility with old models/checkpoints.
                 ray_features = [
                     tuple(rays[i*4:(i+1)*4])
                     for i in range(8)
@@ -166,6 +176,10 @@ def run_visual_dqn():
                     y_off += 20
                 # Show frightened scalar at the end
                 window.blit(dash_font.render(f"Frightened: {frightened_val:+.3f}", True, (135, 206, 250)), (MAX_WINDOW_W + 15, y_off))
+                y_off += 24
+                window.blit(dash_font.render(f"Tile Norm X: {norm_x:+.3f}", True, (173, 216, 230)), (MAX_WINDOW_W + 15, y_off))
+                y_off += 20
+                window.blit(dash_font.render(f"Tile Norm Y: {norm_y:+.3f}", True, (173, 216, 230)), (MAX_WINDOW_W + 15, y_off))
                 y_off += 24
 
             window.fill((20, 20, 20), (0, MAX_WINDOW_H, MAX_WINDOW_W, INFO_BAR_H))

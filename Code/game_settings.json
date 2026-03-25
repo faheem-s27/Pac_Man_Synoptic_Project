@@ -1,23 +1,29 @@
 {
   "window_resolution": "800x800",
   "tile_size": 40,
-  "pacman_speed": 3,
-  "ghost_speed": 2.8,
-  "maze_algorithm": "recursive_backtracking",
-  "maze_seed": "",
-  "enable_ghosts": true,
   "enable_sound": true,
+
+  "pacman_speed": 3,
   "lives": 3,
-  "god_mode": true,
-  "pellets_to_win": -1,
-  "scatter_duration": 7,
-  "chase_duration": 20,
-  "always_chase": false,
-  "level": 1,
+
+  "enable_ghosts": true,
+  "ghost_speed": 2,
   "ghost_speed_increment": 0.2,
-  "enable_power_pellets": true,
   "blinky_active": true,
   "pinky_active": true,
   "inky_active": true,
-  "clyde_active": true
+  "clyde_active": true,
+
+  "chase_duration": 20,
+  "scatter_duration": 7,
+  "always_chase": false,
+
+  "enable_power_pellets": true,
+  "pellets_to_win": -1,
+  "level": 1,
+
+  "maze_algorithm": "recursive_backtracking",
+  "maze_seed": "",
+
+  "god_mode": true
 }

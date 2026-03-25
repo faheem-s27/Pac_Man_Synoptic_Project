@@ -14,14 +14,14 @@ from eval_dqn import evaluate_model
 
 # ── Configuration ──
 TARGET_UPDATE_FREQUENCY = 1000
-BATCH_SIZE = 64
+BATCH_SIZE = 128
 
 
 def train():
     curriculum = CurriculumManager()
 
-    # Egocentric 25-dim observation, 4 relative actions (F,L,R,B)
-    agent = DQNAgent(input_dim=25, output_dim=4)
+    # Egocentric 35-dim observation, 4 relative actions (F,L,R,B)
+    agent = DQNAgent(input_dim=35, output_dim=4)
     print(f"Agent initialized on: {agent.device}")
 
     total_steps = 0

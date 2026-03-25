@@ -12,8 +12,9 @@ Observation (float32):
         4: UP-LEFT, 5: UP-RIGHT, 6: DOWN-LEFT, 7: DOWN-RIGHT.
     - Rays are re-ordered into Pac-Man's egocentric frame based on current heading.
     - 1 scalar frightened flag / timer in [0,1].
+    - 2 scalars for Pac-Man tile position normalized to maze bounds: [norm_x, norm_y].
 
-Total observation size: 33 floats (8 * 4 + 1).
+Total observation size: 35 floats (8 * 4 + 1 + 2).
 
 Action Space: Discrete(4) — egocentric relative actions
     0: FORWARD, 1: LEFT, 2: RIGHT, 3: BACKWARD
@@ -99,8 +100,8 @@ class PacManEnv(gym.Env):
 
         self.action_space = spaces.Discrete(4)
 
-        # Observation: 8 rays * (wall, food, power_pellet, ghost) + frightened flag = 33
-        self.observation_space = spaces.Box(low=-1.0, high=1.0, shape=(33,), dtype=np.float32)
+        # Observation: 8 rays * (wall, food, power_pellet, ghost) + frightened + norm x/y = 35
+        self.observation_space = spaces.Box(low=-1.0, high=1.0, shape=(35,), dtype=np.float32)
 
         self._prev_score = 0
         self._prev_lives = 3
@@ -256,6 +257,11 @@ class PacManEnv(gym.Env):
             frightened_val = max(0.0, min(1.0, float(cur_ft) / float(max_ft)))
         obs.append(frightened_val)
 
+        norm_x = tx / max(1, (eng.maze.width - 1))
+        norm_y = ty / max(1, (eng.maze.height - 1))
+        obs.append(float(norm_x))
+        obs.append(float(norm_y))
+
         return np.array(obs, dtype=np.float32)
 
     def step(self, action: int):
@@ -295,10 +301,16 @@ class PacManEnv(gym.Env):
         else:
             target_dir = backward_map[heading]
 
+        prev_dir = self._last_cardinal_dir
         self._last_cardinal_dir = target_dir
         eng.pacman.next_direction = self._CARDINAL_TO_VEC[target_dir]
 
         accumulated_reward = 0.0
+
+        # Penalize immediate reversals to break forward/backward oscillation loops.
+        opposite = self._CARDINAL_OPPOSITE[prev_dir]
+        if target_dir == opposite:
+            accumulated_reward -= 0.2
 
         # --- Safe Distance Calculation Helpers ---
         def get_min_dist(pac_tx, pac_ty, entities):
@@ -357,7 +369,7 @@ class PacManEnv(gym.Env):
             self._step_count += 1
             self._ticks_since_food += 1
 
-            reward_tick = -0.02  # stronger time pressure
+            reward_tick = -0.01  # normalized time pressure
 
             # Pellets
             pellets_eaten = max(0, pre_pellets - len(eng.pellets))
@@ -369,22 +381,22 @@ class PacManEnv(gym.Env):
             # Power pellets
             power_eaten = max(0, pre_power - len(eng.power_pellets))
             if power_eaten > 0:
-                reward_tick += 5.0 * power_eaten
+                reward_tick += 3.0 * power_eaten
                 self._ticks_since_food = 0
                 self.power_pellets_eaten_this_episode += power_eaten
 
             # Ghosts
             ghosts_eaten = max(0, sum(1 for g in eng.ghosts if g.state == GhostState.EATEN) - pre_eaten)
             if ghosts_eaten > 0:
-                reward_tick += 10.0 * ghosts_eaten
+                reward_tick += 5.0 * ghosts_eaten
                 self.ghosts_eaten_this_episode += ghosts_eaten
 
             # Terminal events
             if eng.won and not pre_won:
-                reward_tick += 100.0
+                reward_tick += 50.0
 
             if eng.lives < pre_lives:
-                reward_tick -= 75.0  # stronger penalty
+                reward_tick -= 20.0
 
             # Starvation
             starved = self._ticks_since_food >= self.starvation_limit
@@ -447,14 +459,16 @@ class PacManEnv(gym.Env):
         cur_tx = int(px // ts)
         cur_ty = int(py // ts)
 
-        # Normalize reward to remove variable tick bias
         accumulated_reward /= max(1, internal_ticks)
 
-        # --- Exploration (decaying) ---
-        if (cur_tx, cur_ty) not in self._visited_tiles:
-            decay = 1.0 - (self._step_count / self.max_episode_steps)
-            accumulated_reward += 0.05 * max(0.0, decay)
+
+        # --- Exploration (new tile bonus + revisit penalty) ---
+        is_new = (cur_tx, cur_ty) not in self._visited_tiles
+        if is_new:
+            accumulated_reward += 0.05
             self._visited_tiles.add((cur_tx, cur_ty))
+        else:
+            accumulated_reward -= 0.03
 
         # --- Food shaping ---
         curr_food_dist = get_min_dist(cur_tx, cur_ty, eng.pellets)
@@ -464,8 +478,8 @@ class PacManEnv(gym.Env):
         # --- Ghost avoidance ---
         if not eng.frightened_mode:
             ghost_dist = get_min_ghost_dist(cur_tx, cur_ty, frightened=False)
-            if ghost_dist < 5:
-                accumulated_reward -= 2.0 / max(1, ghost_dist)
+            if ghost_dist != float('inf'):
+                accumulated_reward += -1.5 / (ghost_dist + 1)
 
         # --- Ghost chasing (frightened mode) ---
         if eng.frightened_mode:
