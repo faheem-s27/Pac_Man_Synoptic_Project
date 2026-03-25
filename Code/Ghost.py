@@ -69,6 +69,7 @@ class Ghost:
         # Load ghost images if they exist
         self.ghost_images = None
         self.frightened_images = None
+        self.white_frightened_images = None
         self.animation_counter = 0
         self._images_loaded = False  # Guard so we only attempt loading once
 
@@ -92,7 +93,7 @@ class Ghost:
         return frames
 
     def _load_ghost_images(self):
-        """Load directional GIFs plus frightened GIF for this ghost."""
+        """Load directional GIFs plus frightened blue/white warning GIFs."""
         directions = ["up", "down", "left", "right"]
         ghost_name = self.name.lower()
         images_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "Images"))
@@ -119,6 +120,14 @@ class Ghost:
                 #print(f"Loaded {len(frames)} frames for frightened ghost animation")
         except Exception:
             print("Note: Could not load frightened ghost GIF")
+
+        try:
+            white_frightened_path = os.path.join(images_dir, "white_ghost.gif")
+            frames = self._load_gif_frames(white_frightened_path)
+            if frames:
+                self.white_frightened_images = frames
+        except Exception:
+            print("Note: Could not load white ghost GIF")
 
         self._images_loaded = True  # Mark as attempted regardless of success
 
@@ -485,13 +494,22 @@ class Ghost:
             return
 
         if self.is_spawned and self.color:
-            # Frightened ghosts use the dedicated blue frightened GIF animation.
-            if self.state == GhostState.FRIGHTENED and self.frightened_images:
-                frames = self.frightened_images
-                frame_index = (self.animation_counter // self.ANIMATION_FRAME_DELAY) % len(frames)
-                image = frames[frame_index]
-                surface.blit(image, (self.x + self.render_offset, self.y + self.render_offset))
-                return
+            # During frightened warning, alternate blue and white visuals.
+            if self.state == GhostState.FRIGHTENED:
+                flash_on = (self.animation_counter // self.ANIMATION_FRAME_DELAY) % 2 == 0
+                use_white = self.frightened_warning and flash_on
+
+                if use_white and self.white_frightened_images:
+                    frames = self.white_frightened_images
+                    frame_index = (self.animation_counter // self.ANIMATION_FRAME_DELAY) % len(frames)
+                    surface.blit(frames[frame_index], (self.x + self.render_offset, self.y + self.render_offset))
+                    return
+
+                if self.frightened_images:
+                    frames = self.frightened_images
+                    frame_index = (self.animation_counter // self.ANIMATION_FRAME_DELAY) % len(frames)
+                    surface.blit(frames[frame_index], (self.x + self.render_offset, self.y + self.render_offset))
+                    return
 
             if self.ghost_images:
                 direction = self._get_current_direction_name()
@@ -504,8 +522,7 @@ class Ghost:
                     pygame.draw.circle(surface, self.color, (int(center_x), int(center_y)), self.render_size // 3)
             else:
                 if self.state == GhostState.FRIGHTENED and self.frightened_warning:
-                    import time
-                    flash = int(time.time() * 6) % 2 == 0
+                    flash = (self.animation_counter // self.ANIMATION_FRAME_DELAY) % 2 == 0
                     color = (255, 255, 255) if flash else (0, 0, 255)
                     pygame.draw.circle(surface, color, (int(center_x), int(center_y)), self.render_size // 3)
                 else:

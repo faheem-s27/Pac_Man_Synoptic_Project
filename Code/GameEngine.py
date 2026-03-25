@@ -331,6 +331,7 @@ class GameEngine:
         # Blinky (Red) — spawns immediately, starts above cage
         if self.blinky_active:
             blinky = Ghost(blinky_px, blinky_py, ts, speed=self.ghost_speed, maze=self.maze, name="Blinky")
+            blinky = Ghost(blinky_px, blinky_py, ts, speed=self.ghost_speed, maze=self.maze, name="Blinky")
             blinky.color     = (255, 0, 0)
             blinky.spawn_delay = 0
             blinky.cage_x    = cage_home_px
@@ -341,7 +342,7 @@ class GameEngine:
         if self.pinky_active:
             pinky = Pinky(pinky_px, interior_py, ts, speed=self.ghost_speed, maze=self.maze, name="Pinky")
             pinky.color      = (255, 184, 255)
-            pinky.spawn_delay = 5 * 60
+            pinky.spawn_delay = 2 * 60
             pinky.cage_x     = pinky_px
             pinky.cage_y     = interior_py
             self.ghosts.append(pinky)
@@ -350,7 +351,7 @@ class GameEngine:
         if self.inky_active:
             inky = Inky(inky_px, interior_py, ts, speed=self.ghost_speed, maze=self.maze, name="Inky", blinky=blinky)
             inky.color       = (0, 255, 255)
-            inky.spawn_delay = 10 * 60
+            inky.spawn_delay = 4 * 60
             inky.cage_x      = inky_px
             inky.cage_y      = interior_py
             self.ghosts.append(inky)
@@ -359,7 +360,7 @@ class GameEngine:
         if self.clyde_active:
             clyde = Clyde(clyde_px, interior_py, ts, speed=self.ghost_speed, maze=self.maze, name="Clyde")
             clyde.color      = (255, 184, 82)
-            clyde.spawn_delay = 15 * 60
+            clyde.spawn_delay = 6 * 60
             clyde.cage_x     = clyde_px
             clyde.cage_y     = interior_py
             self.ghosts.append(clyde)

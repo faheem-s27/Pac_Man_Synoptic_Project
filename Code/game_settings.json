@@ -2,7 +2,7 @@
   "window_resolution": "800x800",
   "tile_size": 40,
   "pacman_speed": 3,
-  "ghost_speed": 2,
+  "ghost_speed": 3.1,
   "maze_algorithm": "recursive_backtracking",
   "maze_seed": "",
   "enable_ghosts": true,
