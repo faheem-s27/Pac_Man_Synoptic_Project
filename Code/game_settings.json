@@ -8,7 +8,7 @@
   "enable_ghosts": true,
   "enable_sound": true,
   "lives": 3,
-  "god_mode": false,
+  "god_mode": true,
   "pellets_to_win": -1,
   "scatter_duration": 7,
   "chase_duration": 20,

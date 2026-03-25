@@ -1,3 +1,5 @@
+import os
+import random
 from enum import Enum
 import pygame
 from Code.Maze import Maze
@@ -121,6 +123,15 @@ class GameEngine:
         self.won = False
         self.pellets = self._initialize_pellets()
         self.power_pellets = self._initialize_power_pellets() if self.enable_power_pellets else []
+
+        # Bonus fruit system (dot-counter triggers scale with total pellet count).
+        self.fruit_spawn_triggers = self._calculate_fruit_spawn_triggers(len(self.pellets))
+        self.pending_fruit_triggers = set()
+        self.active_fruit = None
+        self.fruit_images = {}
+        self._load_fruit_images()
+        self._reset_fruit_state()
+
         self.paused = paused
 
         self.pathfinding = Pathfinding(self.maze)
@@ -138,7 +149,6 @@ class GameEngine:
         self.frightened_duration = 10 * 60  # 10 seconds at 60 FPS
         self.frightened_warning_threshold = 3 * 60  # Start flashing 3 seconds before end
         self.ghosts_eaten_combo = 0  # Track combo for increasing points
-
 
         self.pellet_sounds = []
         self.pellet_sound_index = 0
@@ -159,38 +169,127 @@ class GameEngine:
                     pygame.mixer.Sound("../Audio/eat_dot_1.wav"),
                 ]
                 self.pellet_channel = pygame.mixer.Channel(0)
-            except Exception as e:
-                #print(f"Audio Warning (pellet): {e}")
+            except Exception:
                 pass
 
             try:
                 self.death_sound = pygame.mixer.Sound("../Audio/pacman_death.mp3")
                 self.death_channel = pygame.mixer.Channel(1)
-            except Exception as e:
-                #   print(f"Audio Warning (death): {e}")
+            except Exception:
                 pass
-
 
             try:
                 self.ghost_turn_blue_sound = pygame.mixer.Sound("../Audio/ghost_turn_blue.mp3")
                 self.ghost_turn_blue_channel = pygame.mixer.Channel(2)
-            except Exception as e:
-                #print(f"Audio Warning (ghost turn blue): {e}")
+            except Exception:
                 pass
 
             try:
                 self.ghost_return_to_cage_sound = pygame.mixer.Sound("../Audio/ghost_return_to_cage.mp3")
                 self.ghost_return_to_cage_channel = pygame.mixer.Channel(3)
-            except Exception as e:
-                #print(f"Audio Warning (ghost return to cage): {e}")
+            except Exception:
                 pass
 
             try:
                 self.eat_ghost_sound = pygame.mixer.Sound("../Audio/pacman_eatghost.wav")
                 self.eat_ghost_channel = pygame.mixer.Channel(4)
-            except Exception as e:
-                #print(f"Audio Warning (eat ghost): {e}")
+            except Exception:
                 pass
+
+    def _reset_fruit_state(self):
+        self.pending_fruit_triggers = set(self.fruit_spawn_triggers)
+        self.active_fruit = None
+
+    def _calculate_fruit_spawn_triggers(self, total_regular_pellets):
+        """Scale fruit triggers using classic Pac-Man timing ratios (70/244 and 170/244)."""
+        if total_regular_pellets <= 0:
+            return tuple()
+
+        first_ratio = 70 / 244
+        second_ratio = 170 / 244
+
+        first_trigger = max(1, min(total_regular_pellets, int(round(total_regular_pellets * first_ratio))))
+        second_trigger = max(1, min(total_regular_pellets, int(round(total_regular_pellets * second_ratio))))
+
+        # Keep two ordered checkpoints when possible; tiny mazes may collapse to one trigger.
+        if second_trigger <= first_trigger and total_regular_pellets > 1:
+            second_trigger = min(total_regular_pellets, first_trigger + max(1, total_regular_pellets // 5))
+
+        return tuple(sorted({first_trigger, second_trigger}))
+
+    def _load_fruit_images(self):
+        """Load level fruit sprites from Images/food, scaled to tile size."""
+        images_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "Images", "food"))
+        sprite_files = {
+            "cherry": "cherries.png",
+            "strawberry": "strawberry.png",
+            "peach": "peach.png",
+        }
+        size = max(10, int(self.tile_size * 0.8))
+
+        for key, filename in sprite_files.items():
+            path = os.path.join(images_dir, filename)
+            try:
+                image = pygame.image.load(path)
+                self.fruit_images[key] = pygame.transform.smoothscale(image, (size, size))
+            except Exception:
+                # Silent fallback: draw a circle if sprite loading fails.
+                pass
+
+    def _get_fruit_for_level(self):
+        """Map current level to fruit name/key and score value."""
+        current_level = self.level
+        if current_level <= 1:
+            return "Cherry", "cherry", 100
+        if current_level == 2:
+            return "Strawberry", "strawberry", 300
+        return "Peach", "peach", 500
+
+    def _find_fruit_spawn_position(self):
+        """Spawn fruit at Pac-Man's spawn tile centre."""
+        spawn_x, spawn_y = self._find_safe_spawn_bottom_center()
+        return spawn_x + self.tile_size // 2, spawn_y + self.tile_size // 2
+
+    def _spawn_fruit(self):
+        if self.active_fruit is not None:
+            return
+
+        spawn_pos = self._find_fruit_spawn_position()
+        if spawn_pos is None:
+            return
+
+        fruit_name, sprite_key, points = self._get_fruit_for_level()
+        lifetime_ms = random.randint(9000, 10000)
+        self.active_fruit = {
+            "name": fruit_name,
+            "sprite_key": sprite_key,
+            "points": points,
+            "x": spawn_pos[0],
+            "y": spawn_pos[1],
+            "expires_at": pygame.time.get_ticks() + lifetime_ms,
+        }
+
+    def _forfeit_fruit(self):
+        """Remove active fruit immediately when Pac-Man dies during spawn window."""
+        self.active_fruit = None
+
+    def _update_fruit_state(self, pacman_x, pacman_y, collision_sq_threshold):
+        # Spawn fruit when each trigger is reached; one fruit at a time.
+        if self.active_fruit is None:
+            for trigger in sorted(self.pending_fruit_triggers):
+                if self.pellets_eaten_this_level >= trigger:
+                    self.pending_fruit_triggers.remove(trigger)
+                    self._spawn_fruit()
+                    break
+        else:
+            if pygame.time.get_ticks() >= self.active_fruit["expires_at"]:
+                self.active_fruit = None
+                return
+
+            distance_sq = (pacman_x - self.active_fruit["x"]) ** 2 + (pacman_y - self.active_fruit["y"]) ** 2
+            if distance_sq < collision_sq_threshold:
+                self.pacman.eat_pellet(self.active_fruit["points"])
+                self.active_fruit = None
 
     def _resolve_ghost_activation(self, active_ghost_count):
         """Resolve new per-ghost toggles and keep legacy count behavior as fallback."""
@@ -267,6 +366,8 @@ class GameEngine:
         self.scatter_chase_timer = 0
         self.global_scatter_mode = False if self.always_chase else True
         self.pellets_eaten_this_level = 0
+        self.fruit_spawn_triggers = self._calculate_fruit_spawn_triggers(len(self.pellets))
+        self._reset_fruit_state()
 
         pacman_x, pacman_y = self._find_safe_spawn_bottom_center()
         self.pacman.x = pacman_x
@@ -297,6 +398,8 @@ class GameEngine:
         if self.enable_ghosts:
             self._reset_ghost_spawn_positions()
             self._sync_ghost_modes()  # Reapply always_chase / scatter mode after reset
+
+        self._forfeit_fruit()
 
     def _sync_ghost_modes(self):
         """Stamp the current global scatter/chase mode onto every ghost's is_scatter flag."""
@@ -346,7 +449,6 @@ class GameEngine:
 
         # Blinky (Red) — spawns immediately, starts above cage
         if self.blinky_active:
-            blinky = Ghost(blinky_px, blinky_py, ts, speed=self.ghost_speed, maze=self.maze, name="Blinky")
             blinky = Ghost(blinky_px, blinky_py, ts, speed=self.ghost_speed, maze=self.maze, name="Blinky")
             blinky.color     = (255, 0, 0)
             blinky.spawn_delay = 0
@@ -581,6 +683,9 @@ class GameEngine:
         for i in reversed(pellets_to_remove):
             self.pellets.pop(i)
 
+        # Handle fruit spawn/despawn/collection from pellet trigger counters.
+        self._update_fruit_state(pacman_x, pacman_y, collision_sq_threshold)
+
         # Check power pellet collision
         power_pellets_to_remove = []
         for i, (px, py) in enumerate(self.power_pellets):
@@ -692,6 +797,7 @@ class GameEngine:
                         # No more lives, end the game immediately
                         self.game_over = True
                         self.game_state = GameState.GAME_OVER
+                        self._forfeit_fruit()
                     else:
                         # Immediately reset positions with no special audio-only state
                         self._reset_positions()
@@ -719,6 +825,16 @@ class GameEngine:
                 pygame.draw.circle(surface, (255, 255, 200), (int(px), int(py)), 6)
             else:
                 pygame.draw.circle(surface, (255, 255, 100), (int(px), int(py)), 5)
+
+        if self.active_fruit is not None:
+            fx = self.active_fruit["x"]
+            fy = self.active_fruit["y"]
+            sprite = self.fruit_images.get(self.active_fruit["sprite_key"])
+            if sprite is not None:
+                rect = sprite.get_rect(center=(int(fx), int(fy)))
+                surface.blit(sprite, rect)
+            else:
+                pygame.draw.circle(surface, (255, 80, 80), (int(fx), int(fy)), max(4, self.tile_size // 5))
 
         self.pacman.draw(surface)
 
