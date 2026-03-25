@@ -417,6 +417,17 @@ class GameEngine:
             ghost.is_scatter = self.global_scatter_mode
 
     def _find_safe_spawn_bottom_center(self):
+        # Prefer the long corridor directly beneath the ghost cage.
+        preferred_y = getattr(self.maze, "cage_bottom", self.maze.height // 2) + 1
+        preferred_x = getattr(self.maze, "door_x", self.maze.width // 2)
+
+        if 0 <= preferred_y < self.maze.height:
+            for x_offset in range(0, self.maze.width // 2):
+                for test_x in [preferred_x, preferred_x - x_offset, preferred_x + x_offset]:
+                    if 0 <= test_x < self.maze.width and self.maze.maze[preferred_y][test_x] == 0:
+                        return test_x * self.tile_size, preferred_y * self.tile_size
+
+        # Fallback: centre-down sweep if the preferred row is somehow blocked.
         center_x = self.maze.width // 2
         for offset in range(0, self.maze.height // 3):
             y = self.maze.height - 3 - offset
