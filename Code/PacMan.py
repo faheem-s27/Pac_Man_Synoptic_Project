@@ -29,6 +29,32 @@ class PacMan:
         self.animation_counter = 0
         self.last_facing_direction = "right"
         self._images_loaded = False
+        self.score_popups = []
+        self.score_popup_duration_frames = 45
+
+    def _update_score_popups(self):
+        if not self.score_popups:
+            return
+
+        updated = []
+        for popup in self.score_popups:
+            popup["ttl"] -= 1
+            popup["y"] -= 0.6
+            if popup["ttl"] > 0:
+                updated.append(popup)
+        self.score_popups = updated
+
+    def _draw_score_popups(self, surface):
+        if not self.score_popups:
+            return
+
+        font = pygame.font.Font(None, max(18, self.tile_size // 2))
+        for popup in self.score_popups:
+            alpha = max(0, int(255 * (popup["ttl"] / popup["max_ttl"])))
+            text_surface = font.render(str(popup["points"]), True, (255, 255, 255))
+            text_surface.set_alpha(alpha)
+            rect = text_surface.get_rect(center=(int(popup["x"]), int(popup["y"])))
+            surface.blit(text_surface, rect)
 
     def _load_pacman_images(self):
         directions = ["up", "down", "left", "right"]
@@ -110,6 +136,7 @@ class PacMan:
 
     def update(self, maze):
         self.animation_counter += 1
+        self._update_score_popups()
 
         if self.next_direction != (0, 0):
             is_reverse = (
@@ -205,6 +232,7 @@ class PacMan:
                 frame_index = (self.animation_counter // self.ANIMATION_FRAME_DELAY) % len(frames)
                 image = frames[frame_index]
                 surface.blit(image, (self.x + self.render_offset, self.y + self.render_offset))
+                self._draw_score_popups(surface)
                 return
 
         pygame.draw.circle(
@@ -213,6 +241,7 @@ class PacMan:
             (int(center_x), int(center_y)),
             self.render_size // 3,
         )
+        self._draw_score_popups(surface)
 
     def get_grid_position(self):
         # ✅ FIX 4: Use centre, not top-left
@@ -223,3 +252,12 @@ class PacMan:
     def eat_pellet(self, points=10):
         self.score += points
         self.pellets_eaten += 1
+
+        # Show arcade-style popup for bonuses (fruit, ghost, etc.), not regular pac-dots.
+        self.score_popups.append({
+            "points": points,
+            "x": self.x + self.size // 2,
+            "y": self.y + self.size // 2,
+            "ttl": self.score_popup_duration_frames,
+            "max_ttl": self.score_popup_duration_frames,
+        })
