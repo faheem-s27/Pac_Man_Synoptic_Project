@@ -11,6 +11,7 @@ class Settings:
         "pacman_speed": 2,
         "ghost_speed": -1,
         "maze_algorithm": "recursive_backtracking",
+        "maze_seed": None,
         "enable_ghosts": True,
         "lives": 3,
         "god_mode": False,
@@ -28,6 +29,26 @@ class Settings:
         "inky_active": True,
         "clyde_active": True
     }
+
+    @staticmethod
+    def _normalize_maze_seed(seed_value):
+        """Normalize maze seed values loaded from JSON/user edits."""
+        if seed_value is None:
+            return None
+
+        if isinstance(seed_value, int):
+            return seed_value
+
+        if isinstance(seed_value, str):
+            normalized = seed_value.strip().lower()
+            if normalized in ("", "random"):
+                return None
+            try:
+                return int(normalized)
+            except ValueError:
+                return None
+
+        return None
 
     @staticmethod
     def _apply_ghost_activation_migration(settings: dict) -> dict:
@@ -51,6 +72,8 @@ class Settings:
         settings["pinky_active"] = bool(settings.get("pinky_active", True))
         settings["inky_active"] = bool(settings.get("inky_active", True))
         settings["clyde_active"] = bool(settings.get("clyde_active", True))
+
+        settings["maze_seed"] = Settings._normalize_maze_seed(settings.get("maze_seed"))
 
         # Keep a derived count for any still-legacy consumers.
         settings["active_ghost_count"] = int(

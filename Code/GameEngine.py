@@ -13,6 +13,22 @@ def parse_resolution(resolution_str):
     except:
         return 800, 800
 
+def normalize_maze_seed(seed_value):
+    """Treat blank/'random' strings as random seed mode and parse numeric strings."""
+    if seed_value is None:
+        return None
+    if isinstance(seed_value, int):
+        return seed_value
+    if isinstance(seed_value, str):
+        normalized = seed_value.strip().lower()
+        if normalized in ("", "random"):
+            return None
+        try:
+            return int(normalized)
+        except ValueError:
+            return None
+    return None
+
 class GameState(Enum):
     MENU = 1
     GAME = 2
@@ -89,9 +105,9 @@ class GameEngine:
         if maze_height % 2 == 0: maze_height -= 1
 
         self.maze_algorithm = maze_algorithm
-        self.maze_seed = maze_seed
+        self.maze_seed = normalize_maze_seed(maze_seed)
         self.maze = Maze(self.tile_size, width=maze_width, height=maze_height,
-                         algorithm=maze_algorithm, seed=maze_seed)
+                         algorithm=maze_algorithm, seed=self.maze_seed)
 
         pacman_x, pacman_y = self._find_safe_spawn_bottom_center()
         self.pacman = PacMan(pacman_x, pacman_y, self.tile_size, speed=pacman_speed)
