@@ -161,6 +161,8 @@ class GameEngine:
         self.ghost_return_to_cage_channel = None
         self.eat_ghost_sound = None
         self.eat_ghost_channel = None
+        self.eat_fruit_sound = None
+        self.eat_fruit_channel = None
 
         if enable_sound:
             try:
@@ -193,6 +195,12 @@ class GameEngine:
             try:
                 self.eat_ghost_sound = pygame.mixer.Sound("../Audio/pacman_eatghost.wav")
                 self.eat_ghost_channel = pygame.mixer.Channel(4)
+            except Exception:
+                pass
+
+            try:
+                self.eat_fruit_sound = pygame.mixer.Sound("../Audio/pacman_eatfruit.mp3")
+                self.eat_fruit_channel = pygame.mixer.Channel(5)
             except Exception:
                 pass
 
@@ -289,6 +297,8 @@ class GameEngine:
             distance_sq = (pacman_x - self.active_fruit["x"]) ** 2 + (pacman_y - self.active_fruit["y"]) ** 2
             if distance_sq < collision_sq_threshold:
                 self.pacman.eat_pellet(self.active_fruit["points"])
+                if self.eat_fruit_sound and self.eat_fruit_channel:
+                    self.eat_fruit_channel.play(self.eat_fruit_sound)
                 self.active_fruit = None
 
     def _resolve_ghost_activation(self, active_ghost_count):

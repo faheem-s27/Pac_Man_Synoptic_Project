@@ -253,7 +253,7 @@ class PacMan:
         self.score += points
         self.pellets_eaten += 1
 
-        # Show arcade-style popup for bonuses (fruit, ghost, etc.), not regular pac-dots.
+        # Show arcade-style popup for bonuses (fruit, ghost, etc.).
         self.score_popups.append({
             "points": points,
             "x": self.x + self.size // 2,
