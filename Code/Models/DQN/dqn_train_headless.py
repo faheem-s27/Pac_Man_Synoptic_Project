@@ -11,10 +11,15 @@ from Code.PacManEnv import PacManEnv
 from Code.CurriculumManager import CurriculumManager
 from dqn_agent import DQNAgent
 from eval_dqn import evaluate_model
+from checkpoint_utils import save_checkpoint, load_checkpoint
 
 # ── Configuration ──
 TARGET_UPDATE_FREQUENCY = 1000
 BATCH_SIZE = 128
+SAVE_EVERY_EPISODES = 50
+SAVE_PATH = os.path.join(_HERE, "dqn_pacman.pth")
+CHECKPOINT_PATH = os.path.join(_HERE, "dqn_checkpoint.pt")
+INCLUDE_CURRICULUM_STATE = True
 
 
 def train():
@@ -26,6 +31,26 @@ def train():
 
     total_steps = 0
     episode = 0
+
+    if os.path.exists(CHECKPOINT_PATH):
+        try:
+            load_meta = load_checkpoint(CHECKPOINT_PATH, agent, curriculum=curriculum, map_location=agent.device)
+            if load_meta.get("loaded"):
+                episode = int(load_meta.get("episode", 0))
+                total_steps = int(agent.step_count)
+                print(
+                    f"Resumed checkpoint {CHECKPOINT_PATH} | "
+                    f"episode={episode} epsilon={agent.epsilon:.4f} step_count={agent.step_count}"
+                )
+        except Exception as e:
+            print(f"Checkpoint load failed, continuing fresh. Error: {e}")
+    elif os.path.exists(SAVE_PATH):
+        try:
+            load_meta = load_checkpoint(SAVE_PATH, agent, curriculum=None, map_location=agent.device)
+            if load_meta.get("loaded"):
+                print(f"Loaded legacy weights from {SAVE_PATH}")
+        except Exception as e:
+            print(f"Legacy weights load failed, continuing fresh. Error: {e}")
 
     while True:
         episode += 1
@@ -79,15 +104,22 @@ def train():
         env.close()
 
         # Periodically save
-        if episode % 50 == 0:
-            save_path = os.path.join(_HERE, "dqn_pacman.pth")
-            torch.save(agent.policy_net.state_dict(), save_path)
-            print(f"Saved weights to {save_path}")
+        if episode % SAVE_EVERY_EPISODES == 0:
+            save_checkpoint(
+                CHECKPOINT_PATH,
+                agent,
+                episode,
+                curriculum=curriculum,
+                include_curriculum=INCLUDE_CURRICULUM_STATE,
+            )
+            torch.save(agent.policy_net.state_dict(), SAVE_PATH)
+            print(f"Saved checkpoint to {CHECKPOINT_PATH}")
+            print(f"Saved weights to {SAVE_PATH}")
 
             # Launch a short visual evaluation run using the freshly saved model
             # This will open a pygame window and play a few episodes.
             try:
-                evaluate_model(save_path, episodes=2)
+                evaluate_model(SAVE_PATH, episodes=2)
             except SystemExit:
                 # Allow user to close the eval window without killing training loop
                 pass

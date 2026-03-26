@@ -115,6 +115,7 @@ class PacManEnv(gym.Env):
         self.power_pellets_eaten_this_episode = 0
 
         self._visited_tiles: set[tuple[int, int]] = set()
+        self._visit_counts: dict[tuple[int, int], int] = {}
         self._total_explorable_tiles: int = 0
 
         self.current_stage = None
@@ -151,6 +152,7 @@ class PacManEnv(gym.Env):
         self.power_pellets_eaten_this_episode = 0
 
         self._visited_tiles.clear()
+        self._visit_counts.clear()
         self._total_explorable_tiles = 0
 
         maze = self.engine.maze
@@ -302,15 +304,36 @@ class PacManEnv(gym.Env):
             target_dir = backward_map[heading]
 
         prev_dir = self._last_cardinal_dir
+        prev_action = self._last_action
+        self._last_action = int(action)
         self._last_cardinal_dir = target_dir
         eng.pacman.next_direction = self._CARDINAL_TO_VEC[target_dir]
 
         accumulated_reward = 0.0
+        reward_breakdown = {
+            "reversal_penalty": 0.0,
+            "blocked_penalty": 0.0,
+            "time_penalty": 0.0,
+            "pellet_reward": 0.0,
+            "power_reward": 0.0,
+            "ghost_reward": 0.0,
+            "win_reward": 0.0,
+            "death_penalty": 0.0,
+            "starvation_penalty": 0.0,
+            "exploration_reward": 0.0,
+            "revisit_penalty": 0.0,
+            "food_shaping": 0.0,
+            "ghost_pressure": 0.0,
+            "frightened_chase": 0.0,
+            "total": 0.0,
+        }
 
         # Penalize immediate reversals to break forward/backward oscillation loops.
         opposite = self._CARDINAL_OPPOSITE[prev_dir]
+        reversal_flag = bool(target_dir == opposite)
         if target_dir == opposite:
-            accumulated_reward -= 0.2
+            accumulated_reward -= 0.1
+            reward_breakdown["reversal_penalty"] -= 0.1
 
         # --- Safe Distance Calculation Helpers ---
         def get_min_dist(pac_tx, pac_ty, entities):
@@ -355,6 +378,7 @@ class PacManEnv(gym.Env):
         starved = False
         terminated = False
         truncated = False
+        blocked_or_invalid = False
         while True:
             pre_lives = eng.lives
             pre_won = eng.won
@@ -370,38 +394,48 @@ class PacManEnv(gym.Env):
             self._ticks_since_food += 1
 
             reward_tick = -0.01  # normalized time pressure
+            reward_breakdown["time_penalty"] += -0.01
 
             # Pellets
             pellets_eaten = max(0, pre_pellets - len(eng.pellets))
             if pellets_eaten > 0:
-                reward_tick += 1.0 * pellets_eaten
+                pellet_gain = 1.0 * pellets_eaten
+                reward_tick += pellet_gain
+                reward_breakdown["pellet_reward"] += pellet_gain
                 self._ticks_since_food = 0
                 self.pellets_eaten_this_episode += pellets_eaten
 
             # Power pellets
             power_eaten = max(0, pre_power - len(eng.power_pellets))
             if power_eaten > 0:
-                reward_tick += 3.0 * power_eaten
+                power_gain = 3.0 * power_eaten
+                reward_tick += power_gain
+                reward_breakdown["power_reward"] += power_gain
                 self._ticks_since_food = 0
                 self.power_pellets_eaten_this_episode += power_eaten
 
             # Ghosts
             ghosts_eaten = max(0, sum(1 for g in eng.ghosts if g.state == GhostState.EATEN) - pre_eaten)
             if ghosts_eaten > 0:
-                reward_tick += 5.0 * ghosts_eaten
+                ghost_gain = 5.0 * ghosts_eaten
+                reward_tick += ghost_gain
+                reward_breakdown["ghost_reward"] += ghost_gain
                 self.ghosts_eaten_this_episode += ghosts_eaten
 
             # Terminal events
             if eng.won and not pre_won:
                 reward_tick += 50.0
+                reward_breakdown["win_reward"] += 50.0
 
             if eng.lives < pre_lives:
                 reward_tick -= 20.0
+                reward_breakdown["death_penalty"] -= 20.0
 
             # Starvation
             starved = self._ticks_since_food >= self.starvation_limit
             if starved:
                 reward_tick -= 25.0  # reduced (less overlap with time penalty)
+                reward_breakdown["starvation_penalty"] -= 25.0
 
             accumulated_reward += reward_tick
 
@@ -442,6 +476,7 @@ class PacManEnv(gym.Env):
                 no_progress_ticks = 0
 
             if no_progress_ticks >= max_no_progress_ticks:
+                blocked_or_invalid = True
                 eng.pacman.x = (cur_tx * ts) + (ts // 2) - (eng.pacman.size // 2)
                 eng.pacman.y = (cur_ty * ts) + (ts // 2) - (eng.pacman.size // 2)
                 break
@@ -449,6 +484,7 @@ class PacManEnv(gym.Env):
             # Safety catch: if movement stalls, return control to the policy
             # from this centred tile instead of auto-picking a direction.
             if eng.pacman.direction == (0, 0):
+                blocked_or_invalid = True
                 eng.pacman.x = (cur_tx * ts) + (ts // 2) - (eng.pacman.size // 2)
                 eng.pacman.y = (cur_ty * ts) + (ts // 2) - (eng.pacman.size // 2)
                 break
@@ -461,31 +497,48 @@ class PacManEnv(gym.Env):
 
         accumulated_reward /= max(1, internal_ticks)
 
+        if blocked_or_invalid:
+            accumulated_reward -= 0.1
+            reward_breakdown["blocked_penalty"] -= 0.1
+
 
         # --- Exploration (new tile bonus + revisit penalty) ---
-        is_new = (cur_tx, cur_ty) not in self._visited_tiles
+        tile_key = (cur_tx, cur_ty)
+        visit_count = self._visit_counts.get(tile_key, 0) + 1
+        self._visit_counts[tile_key] = visit_count
+
+        is_new = tile_key not in self._visited_tiles
         if is_new:
             accumulated_reward += 0.05
-            self._visited_tiles.add((cur_tx, cur_ty))
+            reward_breakdown["exploration_reward"] += 0.05
+            self._visited_tiles.add(tile_key)
         else:
-            accumulated_reward -= 0.03
+            revisit_penalty = -0.02 * min(visit_count, 5)
+            accumulated_reward += revisit_penalty
+            reward_breakdown["revisit_penalty"] += revisit_penalty
 
         # --- Food shaping ---
         curr_food_dist = get_min_dist(cur_tx, cur_ty, eng.pellets)
         if curr_food_dist < prev_food_dist and curr_food_dist != float('inf'):
             accumulated_reward += 0.05
+            reward_breakdown["food_shaping"] += 0.05
 
         # --- Ghost avoidance ---
         if not eng.frightened_mode:
             ghost_dist = get_min_ghost_dist(cur_tx, cur_ty, frightened=False)
             if ghost_dist != float('inf'):
-                accumulated_reward += -1.5 / (ghost_dist + 1)
+                ghost_pressure = -1.0 / max(1, ghost_dist)
+                accumulated_reward += ghost_pressure
+                reward_breakdown["ghost_pressure"] += ghost_pressure
 
         # --- Ghost chasing (frightened mode) ---
         if eng.frightened_mode:
             curr_frightened_dist = get_min_ghost_dist(cur_tx, cur_ty, frightened=True)
             if curr_frightened_dist < prev_frightened_dist and curr_frightened_dist != float('inf'):
                 accumulated_reward += 0.1
+                reward_breakdown["frightened_chase"] += 0.1
+
+        reward_breakdown["total"] = float(accumulated_reward)
 
         # 4. Post-Loop Cleanup
         if starved:
@@ -507,12 +560,21 @@ class PacManEnv(gym.Env):
             "tile_center": (cur_tx, cur_ty),
             # Total high-level environment steps taken so far in this episode
             "steps": int(self._step_count),
+            "action": int(action),
+            "prev_action": int(prev_action) if prev_action is not None else None,
+            "target_dir": int(target_dir),
+            "reversal": reversal_flag,
+            "blocked_action": blocked_or_invalid,
+            "visit_count": int(visit_count),
+            "reward_breakdown": reward_breakdown,
         })
 
         if self.render_mode == "human": self._render_human()
         return self._get_obs(), accumulated_reward, terminated, truncated, info
 
     def _get_info(self) -> dict:
+        pellets_remaining = len(self.engine.pellets) + len(self.engine.power_pellets)
+        map_clear_pct = (len(self._visited_tiles) / self._total_explorable_tiles * 100.0) if self._total_explorable_tiles > 0 else 0.0
         return {
             "score": self.engine.pacman.score,
             "frightened": self.engine.frightened_mode,
@@ -525,6 +587,8 @@ class PacManEnv(gym.Env):
             "explored_tiles": len(self._visited_tiles),
             "total_explorable_tiles": self._total_explorable_tiles,
             "explore_rate": (len(self._visited_tiles) / self._total_explorable_tiles) if self._total_explorable_tiles > 0 else 0.0,
+            "pellets_remaining": pellets_remaining,
+            "map_clear_pct": map_clear_pct,
         }
 
     def _ensure_pygame(self):

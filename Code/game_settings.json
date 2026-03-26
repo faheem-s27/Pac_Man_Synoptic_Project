@@ -1,10 +1,10 @@
 {
   "window_resolution": "800x800",
   "tile_size": 40,
-  "enable_sound": true,
+  "enable_sound": false,
 
   "pacman_speed": 3,
-  "lives": 3,
+  "lives": 1,
 
   "enable_ghosts": true,
   "ghost_speed": 2,
@@ -25,5 +25,5 @@
   "maze_algorithm": "recursive_backtracking",
   "maze_seed": "",
 
-  "god_mode": true
+  "god_mode": false
 }
