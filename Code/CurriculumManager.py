@@ -14,11 +14,14 @@ class CurriculumManager:
 
         # Rolling performance window
         self.recent_results = collections.deque(maxlen=50)
-
         self.current_stage = 0
+
+        # Operational Tracker for Grace Periods
+        self.episodes_in_current_stage = 0
 
     def update_performance(self, won: bool):
         self.recent_results.append(bool(won))
+        self.episodes_in_current_stage += 1
 
     # ---------------- PROMOTION ----------------
     def check_promotion(self) -> bool:
@@ -35,21 +38,29 @@ class CurriculumManager:
             self.current_stage += 1
             print(f"\n--- CURRICULUM PROMOTION: Stage {self.current_stage} (win_rate={win_rate:.2f}) ---")
             self.recent_results.clear()
+            self.episodes_in_current_stage = 0  # Reset for grace period
             return True
 
         return False
 
     # ---------------- DEMOTION ----------------
     def check_demotion(self) -> bool:
+        # VITAL: Provide a 150-episode grace period to allow the DQN to adjust
+        # weights to the newly introduced MDP complexities (e.g. faster ghosts)
+        if self.episodes_in_current_stage < 150:
+            return False
+
         if len(self.recent_results) < self.recent_results.maxlen:
             return False
 
         win_rate = sum(self.recent_results) / len(self.recent_results)
 
-        if win_rate <= 0.20 and self.current_stage > 0:
+        # Dropped demotion threshold to 15% to tolerate high-variance exploration
+        if win_rate <= 0.15 and self.current_stage > 0:
             self.current_stage -= 1
             print(f"\n--- CURRICULUM DEMOTION: Stage {self.current_stage} (win_rate={win_rate:.2f}) ---")
             self.recent_results.clear()
+            self.episodes_in_current_stage = 0  # Reset for stabilization
             return True
 
         return False
@@ -59,78 +70,101 @@ class CurriculumManager:
         settings = copy.deepcopy(self.base_settings)
         stage = self.current_stage
 
-        # ---------- STAGE 0: Tutorial ----------
+        # Always randomise maze for generalisation
+        settings["maze_seed"] = None
+
+        # ---------- STAGE 0: Early routing (no ghosts) ----------
         if stage == 0:
-            settings['enable_ghosts'] = False
-            settings['blinky_active'] = False
-            settings['pinky_active'] = False
-            settings['inky_active'] = False
-            settings['clyde_active'] = False
-            settings['pellets_to_win'] = 20
-            settings['max_episode_steps'] = 1000
-            settings['enable_power_pellets'] = False
+            settings.update({
+                "enable_ghosts": False,
+                "blinky_active": False,
+                "pinky_active": False,
+                "inky_active": False,
+                "clyde_active": False,
+                # Relative target: clear 20% of spawned pellets on this map.
+                "pellets_to_win_ratio": 0.20,
+                "pellets_to_win": -1,
+                "max_episode_steps": 2500,
+                "enable_power_pellets": False,
+            })
 
-        # ---------- STAGE 1: Expansion ----------
+        # ---------- STAGE 1: Bigger clear targets (no ghosts) ----------
         elif stage == 1:
-            settings['enable_ghosts'] = False
-            settings['blinky_active'] = False
-            settings['pinky_active'] = False
-            settings['inky_active'] = False
-            settings['clyde_active'] = False
-            settings['pellets_to_win'] = 80
-            settings['max_episode_steps'] = 4000
-            settings['enable_power_pellets'] = False
+            settings.update({
+                "enable_ghosts": False,
+                "blinky_active": False,
+                "pinky_active": False,
+                "inky_active": False,
+                "clyde_active": False,
+                # Relative target: clear 50% of spawned pellets on this map.
+                "pellets_to_win_ratio": 0.50,
+                "pellets_to_win": -1,
+                "max_episode_steps": 5000,
+                "enable_power_pellets": False,
+            })
 
-        # ---------- STAGE 2: Map Mastery ----------
+        # ---------- STAGE 2: Full-map mastery before ghosts ----------
         elif stage == 2:
-            settings['enable_ghosts'] = False
-            settings['blinky_active'] = False
-            settings['pinky_active'] = False
-            settings['inky_active'] = False
-            settings['clyde_active'] = False
-            settings['pellets_to_win'] = 200
-            settings['max_episode_steps'] = 8000
-            settings['enable_power_pellets'] = False
+            settings.update({
+                "enable_ghosts": False,
+                "blinky_active": False,
+                "pinky_active": False,
+                "inky_active": False,
+                "clyde_active": False,
+                # Relative target: clear all spawned pellets on this map.
+                "pellets_to_win_ratio": 0.90,
+                "pellets_to_win": -1,
+                "max_episode_steps": 9000,
+                "enable_power_pellets": False,
+            })
 
-        # ---------- STAGE 3: Ghost Intro ----------
+        # ---------- STAGE 3: Ghost comfort (Blinky only) ----------
         elif stage == 3:
-            settings['enable_ghosts'] = True
-            settings['blinky_active'] = True
-            settings['pinky_active'] = False
-            settings['inky_active'] = False
-            settings['clyde_active'] = False
-            settings['ghost_speed'] = 1
-            settings['pellets_to_win'] = 100
-            settings['max_episode_steps'] = 6000
-            settings['enable_power_pellets'] = False
+            settings.update({
+                "enable_ghosts": True,
+                "blinky_active": True,
+                "pinky_active": False,
+                "inky_active": False,
+                "clyde_active": False,
+                "ghost_speed": 1.3,
+                "scatter_duration": 14,
+                "chase_duration": 6,
+                "pellets_to_win": -1,
+                "max_episode_steps": 12000,
+                "enable_power_pellets": False,
+            })
 
-        # ---------- STAGE 4: First Hunt ----------
+        # ---------- STAGE 4: Two-ghost adaptation ----------
         elif stage == 4:
-            settings['enable_ghosts'] = True
-            settings['blinky_active'] = True
-            settings['pinky_active'] = True
-            settings['inky_active'] = False
-            settings['clyde_active'] = False
-            settings['ghost_speed'] = self.base_settings.get('ghost_speed', 2)
-            settings['scatter_duration'] = 7
-            settings['chase_duration'] = 20
-            settings['pellets_to_win'] = 120
-            settings['enable_power_pellets'] = True
-            settings['max_episode_steps'] = 8000
+            settings.update({
+                "enable_ghosts": True,
+                "blinky_active": True,
+                "pinky_active": True,
+                "inky_active": False,
+                "clyde_active": False,
+                "ghost_speed": 1.7,
+                "scatter_duration": 10,
+                "chase_duration": 10,
+                "pellets_to_win": -1,
+                "enable_power_pellets": True,
+                "max_episode_steps": 13000,
+            })
 
-        # ---------- STAGE 5: Final ----------
+        # ---------- STAGE 5+: Full game ----------
         else:
-            settings['enable_ghosts'] = True
-            settings['blinky_active'] = True
-            settings['pinky_active'] = True
-            settings['inky_active'] = True
-            settings['clyde_active'] = True
-            settings['ghost_speed'] = self.base_settings.get('ghost_speed', 2) + 0.5
-            settings['pellets_to_win'] = -1  # full clear
-            settings['enable_power_pellets'] = True
-            settings['scatter_duration'] = 7
-            settings['chase_duration'] = 20
-            settings['max_episode_steps'] = max(settings.get('max_episode_steps', 15000), 15000)
+            settings.update({
+                "enable_ghosts": True,
+                "blinky_active": True,
+                "pinky_active": True,
+                "inky_active": True,
+                "clyde_active": True,
+                "ghost_speed": self.base_settings.get("ghost_speed", 2),
+                "pellets_to_win": -1,
+                "enable_power_pellets": True,
+                "scatter_duration": 7,
+                "chase_duration": 20,
+                "max_episode_steps": 15000,
+            })
 
         return settings
 

@@ -7,21 +7,32 @@ import random
 from collections import deque
 
 
+# =========================
+# Q-Network
+# =========================
 class QNetwork(nn.Module):
-    """35->128->128->4 MLP for egocentric raycasts + normalized position."""
+    """
+    Improved network:
+    36 -> 256 -> 256 -> 128 -> 4
+    """
 
-    def __init__(self, input_dim: int = 35, output_dim: int = 4):
-        super(QNetwork, self).__init__()
-        self.fc1 = nn.Linear(input_dim, 128)
-        self.fc2 = nn.Linear(128, 128)
-        self.fc3 = nn.Linear(128, output_dim)
+    def __init__(self, input_dim=36, output_dim=4):
+        super().__init__()
+        self.fc1 = nn.Linear(input_dim, 256)
+        self.fc2 = nn.Linear(256, 256)
+        self.fc3 = nn.Linear(256, 128)
+        self.fc4 = nn.Linear(128, output_dim)
 
-    def forward(self, state: torch.Tensor) -> torch.Tensor:
-        x = F.relu(self.fc1(state))
+    def forward(self, x):
+        x = F.relu(self.fc1(x))
         x = F.relu(self.fc2(x))
-        return self.fc3(x)
+        x = F.relu(self.fc3(x))
+        return self.fc4(x)
 
 
+# =========================
+# Replay Buffer
+# =========================
 class ReplayBuffer:
     def __init__(self, capacity=200_000):
         self.buffer = deque(maxlen=capacity)
@@ -32,91 +43,143 @@ class ReplayBuffer:
     def sample(self, batch_size):
         batch = random.sample(self.buffer, batch_size)
         states, actions, rewards, next_states, dones = zip(*batch)
+
         return (
             np.array(states, dtype=np.float32),
             np.array(actions, dtype=np.int64),
             np.array(rewards, dtype=np.float32),
             np.array(next_states, dtype=np.float32),
-            np.array(dones, dtype=np.bool_)
+            np.array(dones, dtype=np.float32),
         )
 
     def __len__(self):
         return len(self.buffer)
 
 
+# =========================
+# DQN Agent
+# =========================
 class DQNAgent:
-    def __init__(self, input_dim: int = 35, output_dim: int = 4, lr: float = 1e-4, gamma: float = 0.99,
-                 epsilon_start: float = 1.0, epsilon_end: float = 0.05, epsilon_decay: int = 1_000_000):
+    def __init__(
+        self,
+        input_dim=36,
+        output_dim=4,
+        lr=3e-4,
+        gamma=0.995,
+        epsilon_start=1.0,
+        epsilon_end=0.1,
+        epsilon_decay=2_000_000,
+    ):
         self.action_dim = output_dim
         self.gamma = gamma
+
+        # Epsilon
         self.epsilon = epsilon_start
+        self.epsilon_start = epsilon_start
         self.epsilon_end = epsilon_end
         self.epsilon_decay = epsilon_decay
+
         self.step_count = 0
 
+        # Device
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+        # Networks
         self.policy_net = QNetwork(input_dim, output_dim).to(self.device)
         self.target_net = QNetwork(input_dim, output_dim).to(self.device)
         self.target_net.load_state_dict(self.policy_net.state_dict())
         self.target_net.eval()
 
+        # Optimizer
         self.optimizer = optim.Adam(self.policy_net.parameters(), lr=lr)
+
+        # Replay buffer
         self.memory = ReplayBuffer(capacity=200_000)
 
-    def select_action(self, state, valid_actions=None) -> int:
+        # Training config
+        self.batch_size = 256
+        self.train_freq = 4
+        self.warmup_steps = 10_000
+        self.tau = 0.005  # soft update
+
+    # =========================
+    # Action Selection
+    # =========================
+    def select_action(self, state, valid_actions=None):
         self.step_count += 1
-        # Exponential decay: fast early exploration, smoother long-term convergence.
-        self.epsilon = self.epsilon_end + (1.0 - self.epsilon_end) * np.exp(
-            -1.0 * self.step_count / self.epsilon_decay
+
+        # Stable epsilon decay
+        self.epsilon = max(
+            self.epsilon_end,
+            self.epsilon_end
+            + (self.epsilon_start - self.epsilon_end)
+            * np.exp(-self.step_count / self.epsilon_decay),
         )
+
         candidate_actions = valid_actions if valid_actions else list(range(self.action_dim))
 
         if random.random() < self.epsilon:
             return random.choice(candidate_actions)
 
         with torch.no_grad():
-            state_tensor = torch.FloatTensor(state).unsqueeze(0).to(self.device)
+            state_tensor = torch.tensor(state, dtype=torch.float32).unsqueeze(0).to(self.device)
             q_values = self.policy_net(state_tensor).squeeze(0)
-            masked_q = torch.full_like(q_values, float('-inf'))
+
+            # Mask invalid actions
+            masked_q = torch.full_like(q_values, float("-inf"))
             for a in candidate_actions:
                 masked_q[a] = q_values[a]
+
             return masked_q.argmax().item()
 
-    def optimize_model(self, batch_size: int = 128):
-        if len(self.memory) < batch_size:
+    # =========================
+    # Training Step
+    # =========================
+    def optimize_model(self):
+        # Warmup
+        if len(self.memory) < self.warmup_steps:
             return None
 
-        state_batch, action_batch, reward_batch, next_state_batch, done_batch = self.memory.sample(batch_size)
-        state_tensor = torch.FloatTensor(state_batch).to(self.device)
-        action_tensor = torch.LongTensor(action_batch).unsqueeze(1).to(self.device)
-        reward_tensor = torch.FloatTensor(reward_batch).to(self.device)
-        next_state_tensor = torch.FloatTensor(next_state_batch).to(self.device)
-        done_tensor = torch.FloatTensor(done_batch).to(self.device)
+        # Train less frequently
+        if self.step_count % self.train_freq != 0:
+            return None
+
+        # Sample
+        states, actions, rewards, next_states, dones = self.memory.sample(self.batch_size)
+
+        state_tensor = torch.tensor(states).to(self.device)
+        action_tensor = torch.tensor(actions).unsqueeze(1).to(self.device)
+        reward_tensor = torch.tensor(rewards).to(self.device)
+        next_state_tensor = torch.tensor(next_states).to(self.device)
+        done_tensor = torch.tensor(dones).to(self.device)
 
         # Current Q
-        current_q_values = self.policy_net(state_tensor).gather(1, action_tensor).squeeze(1)
+        current_q = self.policy_net(state_tensor).gather(1, action_tensor).squeeze(1)
 
-        # -------- DOUBLE DQN --------
+        # Double DQN target
         with torch.no_grad():
-            # Use policy network to select the best next action
             next_actions = self.policy_net(next_state_tensor).argmax(1, keepdim=True)
-            # Use target network to evaluate that action
-            next_q_values = self.target_net(next_state_tensor).gather(1, next_actions).squeeze(1)
-            expected_q_values = reward_tensor + (self.gamma * next_q_values * (1 - done_tensor))
+            next_q = self.target_net(next_state_tensor).gather(1, next_actions).squeeze(1)
+            target_q = reward_tensor + self.gamma * next_q * (1 - done_tensor)
 
-        # -------- HUBER LOSS --------
-        loss = F.smooth_l1_loss(current_q_values, expected_q_values)
+        # Huber loss
+        loss = F.smooth_l1_loss(current_q, target_q)
 
         self.optimizer.zero_grad()
         loss.backward()
 
-        # -------- GRADIENT CLIPPING --------
+        # Gradient clipping
         torch.nn.utils.clip_grad_norm_(self.policy_net.parameters(), 10)
 
         self.optimizer.step()
 
         return loss.item()
 
+    # =========================
+    # Soft Target Update
+    # =========================
     def update_target_network(self):
-        self.target_net.load_state_dict(self.policy_net.state_dict())
+        for target_param, param in zip(self.target_net.parameters(), self.policy_net.parameters()):
+            target_param.data.copy_(
+                self.tau * param.data + (1.0 - self.tau) * target_param.data
+            )

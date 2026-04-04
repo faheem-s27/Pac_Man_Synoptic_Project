@@ -1,7 +1,7 @@
 """
 dqn_train_visual.py
 ===================
-Egocentric 35-input DQN visual trainer.
+Egocentric 36-input DQN visual trainer.
 """
 
 import sys
@@ -11,6 +11,7 @@ import torch
 import random
 import csv
 import numpy as np
+from datetime import datetime
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _ROOT = os.path.dirname(os.path.dirname(os.path.dirname(_HERE)))
@@ -29,9 +30,13 @@ INFO_BAR_H   = 60
 TARGET_FPS   = 120
 SAVE_PATH    = os.path.join(_HERE, "dqn_pacman.pth")
 CHECKPOINT_PATH = os.path.join(_HERE, "dqn_checkpoint.pt")
-LOG_PATH     = os.path.join(_HERE, "training_log.csv")
+LOG_DIR      = os.path.join(_HERE, "csv_history")
+RUN_TIMESTAMP = datetime.now().strftime("%d-%m_%H-%M-%S")
+LOG_PATH     = os.path.join(LOG_DIR, f"training_log_{RUN_TIMESTAMP}.csv")
 SAVE_EVERY_EPISODES = 50
 INCLUDE_CURRICULUM_STATE = True
+# For DQN runs we prefer starvation/game-over as terminal causes over max-step truncation.
+DQN_MAX_EPISODE_STEPS = None
 
 ACTION_NAMES = ['FORWARD', 'LEFT', 'RIGHT', 'BACKWARD']
 CARDINAL_TO_VEC = {
@@ -43,6 +48,15 @@ CARDINAL_TO_VEC = {
 RAY_DIRS = [
     (0, -1), (0, 1), (-1, 0), (1, 0),
     (-1, -1), (1, -1), (-1, 1), (1, 1),
+]
+
+# Runtime speed presets for visual training loop (decision steps per second).
+SPEED_MODES = [
+    ("1x Slow", 1),
+    ("5x Slow", 5),
+    ("Normal", 30),
+    ("Fast", 60),
+    ("Max", TARGET_FPS),
 ]
 
 
@@ -142,21 +156,27 @@ def _draw_raycast_overlay(surface, env: PacManEnv):
 def run_visual_dqn():
     pygame.init()
 
+    if DQN_MAX_EPISODE_STEPS is None:
+        print("[DQN][Visual] max_episode_steps=None -> no max-step truncation; episodes end via win/death/starvation.")
+    else:
+        print(f"[DQN][Visual] max_episode_steps={DQN_MAX_EPISODE_STEPS} -> max-step truncation enabled.")
+
     win_w = MAX_WINDOW_W + DASHBOARD_W
     win_h = MAX_WINDOW_H + INFO_BAR_H
     window = pygame.display.set_mode((win_w, win_h))
-    pygame.display.set_caption("DQN Pac-Man — Egocentric 35D")
+    pygame.display.set_caption("DQN Pac-Man — Egocentric 36D")
 
     info_font = pygame.font.Font(None, 28)
     dash_font = pygame.font.Font(None, 22)
     header_font = pygame.font.Font(None, 26)
     fps_clock = pygame.time.Clock()
+    speed_mode_index = 4  # Default to Max (existing behavior).
 
     curriculum = CurriculumManager()
     base_settings = curriculum.get_settings()
 
     env = PacManEnv(render_mode="rgb_array", **base_settings)
-    agent = DQNAgent(input_dim=35, output_dim=4)
+    agent = DQNAgent(input_dim=36, output_dim=4)
     start_episode = 0
     if os.path.exists(CHECKPOINT_PATH):
         try:
@@ -177,14 +197,14 @@ def run_visual_dqn():
         except Exception as e:
             print(f"Failed to load weights. Starting fresh. Error: {e}")
 
-    batch_size = 128
     episode = start_episode
 
     if not os.path.exists(LOG_PATH):
+        os.makedirs(LOG_DIR, exist_ok=True)
         with open(LOG_PATH, mode="w", newline="", encoding="utf-8") as f:
             writer = csv.writer(f)
             writer.writerow([
-                "Episode", "Stage", "Maze_Seed", "Reward", "Steps",
+                "Algorithm", "Episode", "Stage", "Maze_Seed", "Reward", "Macro_Steps", "Micro_Ticks",
                 "Outcome", "Win", "Epsilon", "Pellets", "Power_Pellets",
                 "Ghosts", "Explore_Rate", "Avg_Loss"
             ])
@@ -193,11 +213,14 @@ def run_visual_dqn():
         episode += 1
 
         current_settings = curriculum.get_settings()
+
         dynamic_seed = random.randint(0, 9999999)
+        #dynamic_seed = 22459265
         current_settings['maze_seed'] = dynamic_seed
+        current_settings['max_episode_steps'] = DQN_MAX_EPISODE_STEPS
 
         env._base_cfg.update(current_settings)
-        env.max_episode_steps = current_settings.get('max_episode_steps', 2000)
+        env.max_episode_steps = DQN_MAX_EPISODE_STEPS
         env.current_stage = curriculum.current_stage
 
         state, _ = env.reset(seed=dynamic_seed)
@@ -206,6 +229,7 @@ def run_visual_dqn():
         loss_history = []
         done = False
         episode_steps = 0
+        episode_micro_ticks = 0
         last_death_cause = "NONE"
         last_info = {}
 
@@ -224,11 +248,25 @@ def run_visual_dqn():
                     env.close()
                     pygame.quit()
                     sys.exit()
+                elif event.type == pygame.KEYDOWN:
+                    if event.key in (pygame.K_1, pygame.K_KP1):
+                        speed_mode_index = 0
+                    elif event.key in (pygame.K_2, pygame.K_KP2):
+                        speed_mode_index = 1
+                    elif event.key in (pygame.K_3, pygame.K_KP3):
+                        speed_mode_index = 2
+                    elif event.key in (pygame.K_4, pygame.K_KP4):
+                        speed_mode_index = 3
+                    elif event.key in (pygame.K_5, pygame.K_KP5):
+                        speed_mode_index = 4
 
-            action = agent.select_action(state, valid_actions=[0, 1, 2, 3])
+            valid_actions = env.get_valid_actions()
+            action = agent.select_action(state, valid_actions=valid_actions)
             next_state, reward, terminated, truncated, info = env.step(action)
             done = terminated or truncated
             episode_steps += 1
+            internal_ticks_step = int(info.get("internal_ticks", 0)) if isinstance(info, dict) else 0
+            episode_micro_ticks += max(0, internal_ticks_step)
 
             if isinstance(info, dict):
                 last_info = info
@@ -238,7 +276,7 @@ def run_visual_dqn():
             agent.memory.push(state, action, reward, next_state, done)
             total_reward += reward
 
-            loss = agent.optimize_model(batch_size)
+            loss = agent.optimize_model()
             if loss is not None:
                 loss_history.append(loss)
 
@@ -266,28 +304,28 @@ def run_visual_dqn():
 
             action_names = ACTION_NAMES
 
-            # Decode 35D state: 8 rays*4 + frightened + norm_x + norm_y.
+            # Decode 36D state: 8 rays*4 + 2 BFS global distances + 2 power-state.
             rays = np.array(state, dtype=float).reshape(-1)
             ray_features = []
-            norm_x = 0.0
-            norm_y = 0.0
-            if rays.shape[0] >= 35:
+            nearest_food = 0.0
+            nearest_danger = 0.0
+            is_powered = 0.0
+            power_remaining = 0.0
+            if rays.shape[0] >= 36:
                 ray_features = [
                     tuple(rays[i*4:(i+1)*4])
                     for i in range(8)
                 ]
-                frightened_val = float(rays[32])
-                norm_x = float(rays[33])
-                norm_y = float(rays[34])
+                nearest_food = float(rays[32])
+                nearest_danger = float(rays[33])
+                is_powered = float(rays[34])
+                power_remaining = float(rays[35])
             elif rays.shape[0] == 33:
                 # Backward compatibility with old models/checkpoints.
                 ray_features = [
                     tuple(rays[i*4:(i+1)*4])
                     for i in range(8)
                 ]
-                frightened_val = float(rays[-1])
-            else:
-                frightened_val = 0.0
 
             y_off = 20
             window.blit(header_font.render("=== DQN LOGIC (EGOCENTRIC) ===", True, (255, 215, 0)), (MAX_WINDOW_W + 15, y_off))
@@ -295,12 +333,17 @@ def run_visual_dqn():
             window.blit(header_font.render(f"Decision: {action_names[action]}", True, (0, 255, 0)), (MAX_WINDOW_W + 15, y_off))
             y_off += 22
 
-            prev_action = info.get("prev_action") if isinstance(info, dict) else None
-            prev_label = action_names[prev_action] if isinstance(prev_action, int) and 0 <= prev_action < len(action_names) else "NONE"
-            reversal = bool(info.get("reversal", False)) if isinstance(info, dict) else False
-            blocked = bool(info.get("blocked_action", False)) if isinstance(info, dict) else False
-            flags_text = f"Prev: {prev_label} | Reversal: {reversal} | Blocked: {blocked}"
-            window.blit(dash_font.render(flags_text, True, (255, 180, 120) if reversal or blocked else (200, 200, 200)), (MAX_WINDOW_W + 15, y_off))
+            target_dir = info.get("target_dir") if isinstance(info, dict) else None
+            dir_name = "NONE"
+            if isinstance(target_dir, int) and target_dir in (PacManEnv.UP, PacManEnv.DOWN, PacManEnv.LEFT_C, PacManEnv.RIGHT_C):
+                dir_name = {
+                    PacManEnv.UP: "UP",
+                    PacManEnv.DOWN: "DOWN",
+                    PacManEnv.LEFT_C: "LEFT",
+                    PacManEnv.RIGHT_C: "RIGHT",
+                }[target_dir]
+            flags_text = f"TargetDir: {dir_name}"
+            window.blit(dash_font.render(flags_text, True, (200, 200, 200)), (MAX_WINDOW_W + 15, y_off))
             y_off += 20
 
             window.blit(header_font.render("--- Q-Values ---", True, (255, 215, 0)), (MAX_WINDOW_W + 15, y_off))
@@ -319,12 +362,13 @@ def run_visual_dqn():
                     label = f"Ray {idx}: W={w_d:+.3f} F={f_d:+.3f} P={p_d:+.3f} G={g_d:+.3f}"
                     window.blit(dash_font.render(label, True, (200, 200, 200)), (MAX_WINDOW_W + 15, y_off))
                     y_off += 16
-                # Show frightened scalar at the end
-                window.blit(dash_font.render(f"Frightened: {frightened_val:+.3f}", True, (135, 206, 250)), (MAX_WINDOW_W + 15, y_off))
+                window.blit(dash_font.render(f"Near Food(BFS): {nearest_food:+.3f}", True, (120, 240, 120)), (MAX_WINDOW_W + 15, y_off))
                 y_off += 18
-                window.blit(dash_font.render(f"Tile Norm X: {norm_x:+.3f}", True, (173, 216, 230)), (MAX_WINDOW_W + 15, y_off))
+                window.blit(dash_font.render(f"Near Danger(BFS): {nearest_danger:+.3f}", True, (255, 120, 120)), (MAX_WINDOW_W + 15, y_off))
                 y_off += 16
-                window.blit(dash_font.render(f"Tile Norm Y: {norm_y:+.3f}", True, (173, 216, 230)), (MAX_WINDOW_W + 15, y_off))
+                window.blit(dash_font.render(f"Powered: {is_powered:+.1f}", True, (255, 220, 140)), (MAX_WINDOW_W + 15, y_off))
+                y_off += 16
+                window.blit(dash_font.render(f"Power Remain: {power_remaining:+.3f}", True, (255, 220, 140)), (MAX_WINDOW_W + 15, y_off))
                 y_off += 18
 
             reward_breakdown = info.get("reward_breakdown", {}) if isinstance(info, dict) else {}
@@ -332,11 +376,11 @@ def run_visual_dqn():
                 window.blit(header_font.render("--- Reward Breakdown ---", True, (255, 215, 0)), (MAX_WINDOW_W + 15, y_off))
                 y_off += 20
                 reward_lines = [
-                    ("Time", reward_breakdown.get("time_penalty", 0.0)),
                     ("Pellet", reward_breakdown.get("pellet_reward", 0.0)),
                     ("Power", reward_breakdown.get("power_reward", 0.0)),
-                    ("Explore", reward_breakdown.get("exploration_reward", 0.0)),
-                    ("GhostP", reward_breakdown.get("ghost_pressure", 0.0)),
+                    ("Ghost", reward_breakdown.get("ghost_reward", 0.0)),
+                    ("Death", reward_breakdown.get("death_penalty", 0.0)),
+                    ("Starve", reward_breakdown.get("starvation_penalty", 0.0)),
                     ("Total", reward_breakdown.get("total", 0.0)),
                 ]
                 for label, value in reward_lines:
@@ -373,8 +417,7 @@ def run_visual_dqn():
             window.blit(dash_font.render(params, True, (180, 220, 180)), (MAX_WINDOW_W + 15, y_off))
             y_off += 18
 
-            internal_ticks = int(info.get("internal_ticks", 0)) if isinstance(info, dict) else 0
-            window.blit(dash_font.render(f"Internal ticks/step: {internal_ticks}", True, (220, 220, 220)), (MAX_WINDOW_W + 15, y_off))
+            window.blit(dash_font.render(f"Internal ticks/step: {internal_ticks_step}", True, (220, 220, 220)), (MAX_WINDOW_W + 15, y_off))
             y_off += 16
 
             pellets_remaining = int(info.get("pellets_remaining", len(eng.pellets) + len(eng.power_pellets))) if isinstance(info, dict) else (len(eng.pellets) + len(eng.power_pellets))
@@ -392,14 +435,17 @@ def run_visual_dqn():
 
             info_bar = (
                 f"Ep: {episode} | Stg: {curriculum.current_stage} | "
-                f"Steps: {steps_disp} | Rwd: {total_reward:+.1f} | "
-                f"Eps: {agent.epsilon:.3f} | Loss: {avg_loss_disp:.2f} | "
-                f"Blk:{'Y' if blocked else 'N'} Rev:{'Y' if reversal else 'N'}"
+                f"Macro: {steps_disp} | Micro: {episode_micro_ticks} | Rwd: {total_reward:+.1f} | "
+                f"Eps: {agent.epsilon:.3f} | Loss: {avg_loss_disp:.2f}"
             )
             window.blit(info_font.render(info_bar, True, (255, 215, 0)), (15, MAX_WINDOW_H + 20))
 
+            speed_name, speed_fps = SPEED_MODES[speed_mode_index]
+            speed_hint = f"Speed: {speed_name} ({speed_fps} step/s)  [1..5]"
+            window.blit(dash_font.render(speed_hint, True, (180, 220, 255)), (15, MAX_WINDOW_H + 42))
+
             pygame.display.flip()
-            fps_clock.tick(TARGET_FPS)
+            fps_clock.tick(speed_fps)
 
             # Sync state for next iteration
             state = next_state
@@ -425,6 +471,7 @@ def run_visual_dqn():
         maze_seed = dynamic_seed
 
         pellets = int(last_info.get("pellets", 0)) if isinstance(last_info, dict) else 0
+        pellets_remaining = int(last_info.get("pellets_remaining", 0)) if isinstance(last_info, dict) else 0
         power_pellets = int(last_info.get("power_pellets", 0)) if isinstance(last_info, dict) else 0
         ghosts = int(last_info.get("ghosts", 0)) if isinstance(last_info, dict) else 0
         explore_rate = float(last_info.get("explore_rate", 0.0)) if isinstance(last_info, dict) else 0.0
@@ -434,7 +481,7 @@ def run_visual_dqn():
         with open(LOG_PATH, mode="a", newline="", encoding="utf-8") as f:
             writer = csv.writer(f)
             writer.writerow([
-                episode, stage, maze_seed, float(total_reward), int(env._step_count),
+                "DQN", episode, stage, maze_seed, float(total_reward), int(episode_steps), int(episode_micro_ticks),
                 outcome, int(won), float(agent.epsilon), pellets, power_pellets,
                 ghosts, explore_rate, float(avg_loss)
             ])

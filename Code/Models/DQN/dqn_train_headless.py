@@ -20,13 +20,20 @@ SAVE_EVERY_EPISODES = 50
 SAVE_PATH = os.path.join(_HERE, "dqn_pacman.pth")
 CHECKPOINT_PATH = os.path.join(_HERE, "dqn_checkpoint.pt")
 INCLUDE_CURRICULUM_STATE = True
+# For DQN runs we prefer starvation/game-over as terminal causes over max-step truncation.
+DQN_MAX_EPISODE_STEPS = None
 
 
 def train():
     curriculum = CurriculumManager()
 
-    # Egocentric 35-dim observation, 4 relative actions (F,L,R,B)
-    agent = DQNAgent(input_dim=35, output_dim=4)
+    if DQN_MAX_EPISODE_STEPS is None:
+        print("[DQN][Headless] max_episode_steps=None -> no max-step truncation; episodes end via win/death/starvation.")
+    else:
+        print(f"[DQN][Headless] max_episode_steps={DQN_MAX_EPISODE_STEPS} -> max-step truncation enabled.")
+
+    # Egocentric 36-dim observation, 4 relative actions (F,L,R,B)
+    agent = DQNAgent(input_dim=36, output_dim=4)
     print(f"Agent initialized on: {agent.device}")
 
     total_steps = 0
@@ -59,6 +66,7 @@ def train():
         current_settings = curriculum.get_settings()
         dynamic_seed = int(torch.randint(0, 10_000_000, (1,)).item())
         current_settings['maze_seed'] = dynamic_seed
+        current_settings['max_episode_steps'] = DQN_MAX_EPISODE_STEPS
 
         env = PacManEnv(render_mode=None, **current_settings)
         state, _ = env.reset(seed=dynamic_seed)
@@ -68,8 +76,8 @@ def train():
         done = False
 
         while not done:
-            # Egocentric 4-action selection (0:F,1:L,2:R,3:B)
-            action = agent.select_action(state, valid_actions=[0, 1, 2, 3])
+            # Egocentric 4-action selection (0:F,1:L,2:R,3:B) with corridor reverse masking.
+            action = agent.select_action(state, valid_actions=env.get_valid_actions())
 
             next_state, reward, terminated, truncated, _ = env.step(action)
             done = terminated or truncated
@@ -90,7 +98,7 @@ def train():
         # Episode finished
         avg_loss = sum(loss_tracker) / len(loss_tracker) if loss_tracker else 0.0
         won = env.engine.won
-        max_steps = current_settings.get('max_episode_steps')
+        max_steps = env.max_episode_steps
         print(
             f"Episode {episode} | Stage: {curriculum.current_stage} | MaxSteps: {max_steps} | "
             f"Reward: {total_reward:.1f} | Won: {won} | Epsilon: {agent.epsilon:.3f} | "
@@ -99,7 +107,9 @@ def train():
 
         # Update curriculum performance and possibly promote stage
         curriculum.update_performance(won)
-        curriculum.check_promotion()
+        promoted = curriculum.check_promotion()
+        if promoted:
+            agent.epsilon = max(agent.epsilon, 0.2)
 
         env.close()
 

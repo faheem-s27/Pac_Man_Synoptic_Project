@@ -34,10 +34,8 @@ _ROOT = os.path.dirname(_HERE)
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-from Code.GameEngine import GameEngine, GameState
-from Code.Ghost      import GhostState
+from Code.PacManEnv import PacManEnv
 from Code.CurriculumManager import CurriculumManager
-from Code.Pathfinding import Pathfinding
 
 # ─── Tunables ────────────────────────────────────────────────────────────────
 MAZE_ALGORITHM  = "recursive_backtracking"
@@ -52,9 +50,24 @@ INFO_BAR_H   = 44
 TARGET_FPS   = 60
 # ─────────────────────────────────────────────────────────────────────────────
 
-# ACTION: 4-Action Space strictly enforced (NOOP amputated)
-ACTION_NAMES = ["UP", "DOWN", "LEFT", "RIGHT"]
-DIR_MAP      = {0: (0, -1), 1: (0, 1), 2: (-1, 0), 3: (1, 0)}
+# ACTION: Egocentric 4-action space (FORWARD/LEFT/RIGHT/BACKWARD)
+ACTION_NAMES = ["FORWARD", "LEFT", "RIGHT", "BACKWARD"]
+
+
+def _settings_for_generation(curriculum: CurriculumManager, generation: int) -> dict:
+    if generation < 50:
+        curriculum.current_stage = 0
+    elif generation < 100:
+        curriculum.current_stage = 1
+    elif generation < 180:
+        curriculum.current_stage = 2
+    elif generation < 260:
+        curriculum.current_stage = 3
+    elif generation < 360:
+        curriculum.current_stage = 4
+    else:
+        curriculum.current_stage = 5
+    return curriculum.get_settings()
 
 
 def compute_grid_layout(n: int, game_w: int, game_h: int):
@@ -80,21 +93,21 @@ def compute_grid_layout(n: int, game_w: int, game_h: int):
     return best
 
 
-def _make_engine(settings: dict) -> GameEngine:
+def _make_env(settings: dict, maze_seed: int | None = None) -> PacManEnv:
     cfg = dict(settings)
-    cfg["maze_algorithm"]   = MAZE_ALGORITHM
-    cfg["enable_sound"]     = False   # never play audio during training
-    cfg.setdefault("maze_seed", None) # random procedural generation
-    engine = GameEngine(**cfg)
-    engine.game_state = GameState.GAME
-    engine.paused     = False
-    return engine
+    cfg["maze_algorithm"] = MAZE_ALGORITHM
+    cfg["enable_sound"] = False
+    if maze_seed is not None:
+        cfg["maze_seed"] = maze_seed
+    env = PacManEnv(render_mode="rgb_array", obs_type="vector", settings=cfg)
+    env.reset(seed=maze_seed)
+    return env
 
 
 # ─── Per-genome runner ────────────────────────────────────────────────────────
 
 class GenomeRunner:
-    """One complete independent game + NEAT network for a single genome."""
+    """One complete independent PacManEnv + NEAT network for a single genome."""
 
     _game_w: int = 0
     _game_h: int = 0
@@ -102,130 +115,31 @@ class GenomeRunner:
     def __init__(self, genome, config, env_settings: dict):
         self.genome = genome
         self.net = neat.nn.FeedForwardNetwork.create(genome, config)
-        self.engine = _make_engine(env_settings)
+        maze_seed = int(np.random.randint(0, 10_000_000))
+        self.env = _make_env(env_settings, maze_seed=maze_seed)
+        self.engine = self.env.engine
+        self.obs, _ = self.env.reset(seed=maze_seed)
         self.done = False
         self.total_reward = 0.0
         self.steps = 0
-        self.prev_score = 0
-        self.prev_lives = self.engine.lives
-        self._last_action = None
-        self._locked_pellet = None
         self.max_steps = env_settings.get('max_episode_steps', MAX_STEPS)
 
         GenomeRunner._game_w = self.engine.screen_width
         GenomeRunner._game_h = self.engine.screen_height
         self._surf = pygame.Surface((GenomeRunner._game_w, GenomeRunner._game_h))
 
-    def _obs(self) -> list[float]:
-        eng = self.engine
-        ts = eng.tile_size
-        mw_px, mh_px = eng.maze.width * ts, eng.maze.height * ts
-
-        pac_cx = eng.pacman.x + (ts / 2.0)
-        pac_cy = eng.pacman.y + (ts / 2.0)
-        pac_dir = eng.pacman.direction
-        pac_tx, pac_ty = int(pac_cx / ts), int(pac_cy / ts)
-
-        pf = Pathfinding(eng.maze)
-        obs: list[float] = [float(pac_dir[0]), float(pac_dir[1])]
-
-        # 2) K-nearest ghosts (Topological + Proximity Threat)
-        active_ghosts = []
-        for g in eng.ghosts:
-            if g.state in (GhostState.EATEN, GhostState.SPAWNING): continue
-            g_tx, g_ty = int(g.x / ts), int(g.y / ts)
-            path = pf.find_shortest_path(pac_tx, pac_ty, g_tx, g_ty)
-            path_len = len(path) if path else 999
-
-            if path and len(path) > 1:
-                nx, ny = path[1]
-                rx = ((nx * ts + ts / 2) - pac_cx) / mw_px
-                ry = ((ny * ts + ts / 2) - pac_cy) / mh_px
-            else:
-                rx, ry = (g.x + ts / 2 - pac_cx) / mw_px, (g.y + ts / 2 - pac_cy) / mh_px
-            active_ghosts.append((path_len, rx, ry, g.state))
-
-        active_ghosts.sort(key=lambda t: t[0])
-        for k in range(2):
-            if k < len(active_ghosts):
-                p_len, rx, ry, state = active_ghosts[k]
-                prox = 1.0 / max(1, p_len)
-                threat = (1.0 if state != GhostState.FRIGHTENED else -1.0) * prox
-                obs.extend([rx, ry, float(threat)])
-            else:
-                obs.extend([0.0, 0.0, 0.0])
-
-        # 3) Nearest normal pellet (Topological Breadcrumb + Target Locking)
-        pellet_rel = [0.0, 0.0]
-        if eng.pellets:
-            if self._locked_pellet not in eng.pellets: self._locked_pellet = None
-            if self._locked_pellet is None:
-                dists = sorted(((px - pac_cx) ** 2 + (py - pac_cy) ** 2, (px, py)) for px, py in eng.pellets)
-                self._locked_pellet = dists[0][1]
-
-            p_tx, p_ty = int(self._locked_pellet[0] / ts), int(self._locked_pellet[1] / ts)
-            path = pf.find_shortest_path(pac_tx, pac_ty, p_tx, p_ty, current_dir=pac_dir)
-            if path and len(path) > 1:
-                nx, ny = path[1]
-                pellet_rel = [((nx * ts + ts / 2) - pac_cx) / mw_px, ((ny * ts + ts / 2) - pac_cy) / mh_px]
-            else:
-                pellet_rel = [(self._locked_pellet[0] - pac_cx) / mw_px, (self._locked_pellet[1] - pac_cy) / mh_px]
-        obs.extend(pellet_rel)
-
-        # 4) Wall sensors
-        for ddx, ddy in [(0, -1), (0, 1), (-1, 0), (1, 0)]:
-            nx, ny = pac_tx + ddx, pac_ty + ddy
-            obs.append(1.0 if not (0 <= nx < eng.maze.width and 0 <= ny < eng.maze.height) or eng.maze.maze[ny][
-                nx] == 1 else 0.0)
-
-        # 5) Nearest power pellet
-        pp_rel = [0.0, 0.0]
-        if eng.power_pellets:
-            dists = sorted(((px - pac_cx) ** 2 + (py - pac_cy) ** 2, (px, py)) for px, py in eng.power_pellets)
-            p_tx, p_ty = int(dists[0][1][0] / ts), int(dists[0][1][1] / ts)
-            path = pf.find_shortest_path(pac_tx, pac_ty, p_tx, p_ty, current_dir=pac_dir)
-            if path and len(path) > 1:
-                nx, ny = path[1]
-                pp_rel = [((nx * ts + ts / 2) - pac_cx) / mw_px, ((ny * ts + ts / 2) - pac_cy) / mh_px]
-            else:
-                pp_rel = [(dists[0][1][0] - pac_cx) / mw_px, (dists[0][1][1] - pac_cy) / mh_px]
-        obs.extend(pp_rel)
-
-        return obs
-
     def step(self):
         if self.done: return
-        output = self.net.activate(self._obs())
-        action = int(np.argmax(output))
+        output = self.net.activate(self.obs.tolist())
+        valid_actions = self.env.get_valid_actions()
+        action = max(valid_actions, key=lambda a: output[a]) if valid_actions else int(np.argmax(output))
 
-        # 180-Degree Reversal Penalty
-        reward = -0.05
-        if self._last_action is not None:
-            reversal = False
-            if (self._last_action == 0 and action == 1) or (self._last_action == 1 and action == 0) or \
-                    (self._last_action == 2 and action == 3) or (self._last_action == 3 and action == 2):
-                reward -= 2.0
-        self._last_action = action
-
-        self.engine.pacman.next_direction = DIR_MAP[action]
-        self.engine.update()
+        self.obs, reward, terminated, truncated, _ = self.env.step(action)
+        self.engine = self.env.engine
         self.steps += 1
 
-        score_delta = self.engine.pacman.score - self.prev_score
-        if score_delta > 0: reward += float(score_delta) / 2.0
-        self.prev_score = self.engine.pacman.score
-
-        if self.engine.lives < self.prev_lives:
-            reward -= 50.0
-            self.prev_lives = self.engine.lives
-
-        if self.engine.won:
-            reward += 100.0
-            self.engine.next_level()
-
         self.total_reward += reward
-        if self.engine.game_over or self.steps >= self.max_steps:
-            if self.engine.game_over: self.total_reward -= 50.0
+        if terminated or truncated or self.steps >= self.max_steps:
             self.genome.fitness = self.total_reward
             self.done = True
 
@@ -234,7 +148,9 @@ class GenomeRunner:
                   cell_w: int, cell_h: int,
                   is_best: bool, label_font: pygame.font.Font):
         self._surf.fill((0, 0, 0))
-        self.engine.draw(self._surf)
+        frame = self.env.render()
+        if frame is not None:
+            self._surf.blit(pygame.surfarray.make_surface(np.transpose(frame, (1, 0, 2))), (0, 0))
 
         if self.done:
             dim = pygame.Surface((GenomeRunner._game_w, GenomeRunner._game_h), pygame.SRCALPHA)
@@ -252,6 +168,9 @@ class GenomeRunner:
         color = (255, 215, 0) if is_best else ((80, 80, 80) if self.done else (200, 200, 200))
         lbl   = label_font.render(f"{self.total_reward:+.0f}", True, color)
         window.blit(lbl, (dest_x + 3, dest_y + 3))
+
+    def close(self):
+        self.env.close()
 
 
 # ─── Best-genome saver ────────────────────────────────────────────────────────
@@ -283,6 +202,21 @@ def run(checkpoint=None):
         neat.DefaultStagnation,
         CONFIG_PATH,
     )
+
+    probe_settings = _settings_for_generation(curriculum=CurriculumManager(os.path.join(_ROOT, "game_settings.json")), generation=0)
+    probe_env = PacManEnv(render_mode=None, obs_type="vector", settings=probe_settings)
+    probe_obs, _ = probe_env.reset(seed=123)
+    obs_dim = len(probe_obs)
+    action_dim = int(getattr(probe_env.action_space, "n", 4))
+    probe_env.close()
+    if config.genome_config.num_inputs != obs_dim:
+        raise ValueError(
+            f"NEAT config num_inputs={config.genome_config.num_inputs} does not match PacManEnv obs_dim={obs_dim}."
+        )
+    if config.genome_config.num_outputs != action_dim:
+        raise ValueError(
+            f"NEAT config num_outputs={config.genome_config.num_outputs} does not match action_dim={action_dim}."
+        )
 
     if checkpoint and os.path.exists(checkpoint):
         print(f"Resuming from: {checkpoint}")
@@ -321,8 +255,8 @@ def run(checkpoint=None):
         gen = generation_counter[0]
         generation_counter[0] += 1
 
-        # ACTION: Fetch specific Curriculum settings for the current generation
-        current_settings = curriculum.get_settings_for_generation(gen)
+        # Fetch curriculum settings for this generation.
+        current_settings = _settings_for_generation(curriculum, gen)
 
         genome_list = [g for _, g in genomes]
         n           = len(genome_list)
@@ -341,6 +275,8 @@ def run(checkpoint=None):
         if window[0] is None or window[0].get_size() != (win_w, win_h):
             window[0] = pygame.display.set_mode((win_w, win_h))
             pygame.display.set_caption("NEAT Pac-Man — Visual Curriculum Training")
+        win_surface = window[0]
+        assert win_surface is not None
 
         best_runner_idx = None
 
@@ -361,17 +297,17 @@ def run(checkpoint=None):
                 best_runner_idx = max(alive, key=lambda i: runners[i].total_reward)
 
             game_area_h = rows * cell_h
-            window[0].fill((15, 15, 15))
+            win_surface.fill((15, 15, 15))
             for idx, r in enumerate(runners):
-                r.draw_cell(window[0], idx % cols, idx // cols,
+                r.draw_cell(win_surface, idx % cols, idx // cols,
                             cell_w, cell_h,
                             is_best=(idx == best_runner_idx),
                             label_font=label_font)
 
             for c in range(1, cols):
-                pygame.draw.line(window[0], (40, 40, 40), (c*cell_w, 0), (c*cell_w, game_area_h))
+                pygame.draw.line(win_surface, (40, 40, 40), (c*cell_w, 0), (c*cell_w, game_area_h))
             for r in range(1, rows):
-                pygame.draw.line(window[0], (40, 40, 40), (0, r*cell_h), (win_w, r*cell_h))
+                pygame.draw.line(win_surface, (40, 40, 40), (0, r*cell_h), (win_w, r*cell_h))
 
             alive_count = sum(1 for r in runners if not r.done)
             best_r  = max(r.total_reward for r in runners)
@@ -380,13 +316,15 @@ def run(checkpoint=None):
                        f"Best: {best_r:+.0f}  |  Avg: {avg_r:+.0f}  |  "
                        f"FPS {fps_clock.get_fps():.0f}")
 
-            window[0].fill((0, 0, 0), (0, game_area_h, win_w, INFO_BAR_H))
-            window[0].blit(info_font.render(info, True, (200, 200, 200)), (8, game_area_h + 10))
+            win_surface.fill((0, 0, 0), (0, game_area_h, win_w, INFO_BAR_H))
+            win_surface.blit(info_font.render(info, True, (200, 200, 200)), (8, game_area_h + 10))
             pygame.display.flip()
             fps_clock.tick(TARGET_FPS)
 
         for i, g in enumerate(genome_list):
             g.fitness = runners[i].total_reward
+        for r in runners:
+            r.close()
 
     try:
         # Run 1 generation at a time to sync with the counter properly, or run full loop

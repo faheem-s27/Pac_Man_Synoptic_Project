@@ -15,23 +15,23 @@ from dqn_agent import QNetwork
 
 
 def evaluate_model(model_path, episodes=3):
-    """Visual evaluation for the 35-dim egocentric DQN (4 actions)."""
+    """Visual evaluation for the 36-dim egocentric DQN (4 actions)."""
     pygame.init()
     fps_clock = pygame.time.Clock()
     TARGET_FPS = 10
 
-    env = PacManEnv(render_mode=None)
+    env = PacManEnv(render_mode=None, max_episode_steps=None)
 
     win_w = env.engine.screen_width
     win_h = env.engine.screen_height + 60
     screen = pygame.display.set_mode((win_w, win_h))
-    pygame.display.set_caption("DQN Evaluation — Egocentric 35D")
+    pygame.display.set_caption("DQN Evaluation — Egocentric 36D")
 
     info_font = pygame.font.Font(None, 28)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    # 35-dim in, 4 egocentric actions out
-    policy_net = QNetwork(input_dim=35, output_dim=4).to(device)
+    # 36-dim in, 4 egocentric actions out
+    policy_net = QNetwork(input_dim=36, output_dim=4).to(device)
     policy_net.load_state_dict(torch.load(model_path, map_location=device, weights_only=True))
     policy_net.eval()
 
@@ -51,7 +51,8 @@ def evaluate_model(model_path, episodes=3):
             with torch.no_grad():
                 state_tensor = torch.FloatTensor(state).unsqueeze(0).to(device)
                 q_values = policy_net(state_tensor).squeeze(0).cpu().numpy()
-                action = int(np.argmax(q_values))
+                valid_actions = env.get_valid_actions()
+                action = max(valid_actions, key=lambda a: q_values[a]) if valid_actions else int(np.argmax(q_values))
 
             next_state, reward, terminated, truncated, _ = env.step(action)
             total_reward += reward

@@ -44,7 +44,7 @@ class GameEngine:
                  maze_algorithm="recursive_backtracking",
                  enable_ghosts=True, tile_size=40, lives=3,
                  window_resolution="800x800",
-                 god_mode=False, max_pellets=-1, pellets_to_win=-1,
+                 god_mode=False, max_pellets=-1, pellets_to_win=-1, pellets_to_win_ratio=None,
                  scatter_duration=10, chase_duration=20,
                  always_chase=False,
                  level=1, ghost_speed_increment=0.1,
@@ -76,6 +76,11 @@ class GameEngine:
         self.enable_power_pellets = enable_power_pellets
         self.max_pellets = max_pellets  # legacy, unused — kept for **kwargs safety
         self.pellets_to_win = pellets_to_win  # -1 = eat all pellets to win
+        if pellets_to_win_ratio is None:
+            self.pellets_to_win_ratio = None
+        else:
+            # Clamp to [0, 1] to ensure a valid percentage target.
+            self.pellets_to_win_ratio = max(0.0, min(1.0, float(pellets_to_win_ratio)))
         self.pellets_eaten_this_level = 0
         self.pacman_speed = pacman_speed
 
@@ -123,6 +128,13 @@ class GameEngine:
         self.won = False
         self.pellets = self._initialize_pellets()
         self.power_pellets = self._initialize_power_pellets() if self.enable_power_pellets else []
+
+        if self.pellets_to_win_ratio is not None:
+            total_spawned = len(self.pellets) + len(self.power_pellets)
+            target = int(round(total_spawned * self.pellets_to_win_ratio))
+            if total_spawned > 0 and self.pellets_to_win_ratio > 0.0:
+                target = max(1, target)
+            self.pellets_to_win = min(total_spawned, target)
 
         # Bonus fruit system (dot-counter triggers scale with total pellet count).
         self.fruit_spawn_triggers = self._calculate_fruit_spawn_triggers(len(self.pellets))
@@ -539,8 +551,13 @@ class GameEngine:
         total_possible = len(pellets)
 
         if self.debug_logs:
-            print(f"[Pellets] Placing all {total_possible} pellets. "
-                  f"Pellets to win: {'all' if self.pellets_to_win < 0 else self.pellets_to_win}.")
+            if self.pellets_to_win_ratio is not None:
+                print(f"[Pellets] Spawned {len(pellets)} pellets (+ power later). "
+                      f"Target ratio={self.pellets_to_win_ratio:.2f}.")
+            else:
+                print(f"[Pellets] Spawned {len(pellets)} pellets. "
+                      f"Pellets to win: {'all' if self.pellets_to_win < 0 else self.pellets_to_win}.")
+
         return pellets
 
     def _initialize_power_pellets(self):
@@ -898,3 +915,4 @@ class GameEngine:
         if self.won:
             win_font = pygame.font.Font(None, 64)
             surface.blit(win_font.render("YOU WIN!", True, (0, 255, 0)), win_font.render("YOU WIN!", True, (0, 255, 0)).get_rect(center=(self.screen_width // 2, self.screen_height // 2)))
+

@@ -1,5 +1,5 @@
 {
-  "window_resolution": "800x800",
+  "window_resolution": "900x900",
   "tile_size": 40,
   "enable_sound": false,
 
@@ -7,7 +7,7 @@
   "lives": 1,
 
   "enable_ghosts": true,
-  "ghost_speed": 2,
+  "ghost_speed": 4,
   "ghost_speed_increment": 0.2,
   "blinky_active": true,
   "pinky_active": true,
@@ -25,5 +25,6 @@
   "maze_algorithm": "recursive_backtracking",
   "maze_seed": "",
 
-  "god_mode": false
+  "god_mode": false,
+  "tile_center_tolerance": 3
 }

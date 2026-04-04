@@ -5,16 +5,19 @@ Egocentric Raycast Version.
 
 Observation (float32):
     - 8 global raycasts: for each direction, 4 floats:
-        [1/d_wall, 1/d_food, 1/d_power_pellet, signed_ghost]
-      where signed_ghost > 0 means lethal ghost, < 0 means frightened ghost, 0 = none.
+        [ray_wall, ray_food, ray_power_pellet, ghost_signal]
+      where ghost_signal is signed in [-1,1]:
+      > 0 lethal ghost, < 0 frightened ghost, 0 = none.
       Directions (global frame):
         0: UP, 1: DOWN, 2: LEFT, 3: RIGHT,
         4: UP-LEFT, 5: UP-RIGHT, 6: DOWN-LEFT, 7: DOWN-RIGHT.
     - Rays are re-ordered into Pac-Man's egocentric frame based on current heading.
-    - 1 scalar frightened flag / timer in [0,1].
-    - 2 scalars for Pac-Man tile position normalized to maze bounds: [norm_x, norm_y].
-
-Total observation size: 35 floats (8 * 4 + 1 + 2).
+    - 2 BFS nearest-entity scalars (global awareness):
+        [d_nearest_food, d_nearest_ghost_dangerous]
+      represented as 1 / (1 + shortest_path_distance) (0 if unreachable / none).
+    - 2 power-state scalars:
+        [is_powered, power_time_remaining_normalized].
+Total observation size: 36 floats (8 * 4 + 2 + 2).
 
 Action Space: Discrete(4) — egocentric relative actions
     0: FORWARD, 1: LEFT, 2: RIGHT, 3: BACKWARD
@@ -27,6 +30,7 @@ all internal ticks.
 
 import sys
 import os
+from collections import deque
 import numpy as np
 import gymnasium as gym
 from gymnasium import spaces
@@ -77,7 +81,7 @@ class PacManEnv(gym.Env):
         (1, 1),    # DOWN-RIGHT
     ]
 
-    def __init__(self, render_mode: str | None = None, obs_type: str = "vector", settings: dict | None = None, settings_path: str | None = None, max_episode_steps: int = 10000, maze_seed: int | None = None, **engine_kwargs):
+    def __init__(self, render_mode: str | None = None, obs_type: str = "vector", settings: dict | None = None, settings_path: str | None = None, max_episode_steps: int | None = 10000, maze_seed: int | None = None, **engine_kwargs):
         super().__init__()
         self.render_mode = render_mode
         self.obs_type = obs_type
@@ -87,7 +91,15 @@ class PacManEnv(gym.Env):
         self._base_cfg = _load_settings(settings if settings else settings_path)
         self._base_cfg.update(engine_kwargs)
 
-        self.max_episode_steps = self._base_cfg.get("max_episode_steps", max_episode_steps)
+        raw_max_steps = self._base_cfg.get("max_episode_steps", max_episode_steps)
+        # None (or <= 0) disables time-based truncation so starvation/game-over decide episode end.
+        if raw_max_steps is None or float(raw_max_steps) <= 0:
+            self.max_episode_steps = None
+        else:
+            self.max_episode_steps = int(raw_max_steps)
+
+        # Exact centre-lock mode: keep this popped so it never leaks into GameEngine kwargs.
+        self._base_cfg.pop("tile_center_tolerance", None)
 
         self.starvation_limit = 30 * 60
         self._ticks_since_food = 0
@@ -96,17 +108,12 @@ class PacManEnv(gym.Env):
         self._screen = None
         self._clock = None
         self.engine = None
-        self._engine = None
 
         self.action_space = spaces.Discrete(4)
 
-        # Observation: 8 rays * (wall, food, power_pellet, ghost) + frightened + norm x/y = 35
-        self.observation_space = spaces.Box(low=-1.0, high=1.0, shape=(35,), dtype=np.float32)
+        # Observation: all 36 features are bounded to [-1, 1].
+        self.observation_space = spaces.Box(low=-1.0, high=1.0, shape=(36,), dtype=np.float32)
 
-        self._prev_score = 0
-        self._prev_lives = 3
-        self._won_already = False
-        self._levels_completed = 0
         self._last_action = None
         self._last_cardinal_dir = self.UP
 
@@ -116,6 +123,7 @@ class PacManEnv(gym.Env):
 
         self._visited_tiles: set[tuple[int, int]] = set()
         self._visit_counts: dict[tuple[int, int], int] = {}
+        self._bfs_cache: dict[tuple[int, int], dict[tuple[int, int], int]] = {}
         self._total_explorable_tiles: int = 0
 
         self.current_stage = None
@@ -126,18 +134,15 @@ class PacManEnv(gym.Env):
         self._ensure_pygame()
 
         cfg = self._base_cfg.copy()
-        if seed is not None: cfg["maze_seed"] = seed
+        if seed is not None:
+            cfg["maze_seed"] = seed
+            np.random.seed(seed)
 
         self.engine = GameEngine(**cfg)
-        self._engine = self.engine
         self.engine.game_state = GameState.GAME
         self.engine.paused = False
 
-        self._prev_score = 0
-        self._prev_lives = self.engine.lives
-        self._won_already = False
         self._step_count = 0
-        self._levels_completed = 0
         self._last_action = None
         dx, dy = self.engine.pacman.direction
         if (dx, dy) == (0, 0):
@@ -153,7 +158,9 @@ class PacManEnv(gym.Env):
 
         self._visited_tiles.clear()
         self._visit_counts.clear()
+        self._bfs_cache = {}
         self._total_explorable_tiles = 0
+
 
         maze = self.engine.maze
         for y in range(maze.height):
@@ -177,6 +184,89 @@ class PacManEnv(gym.Env):
 
     def _get_obs(self) -> np.ndarray:
         return self._get_vector_obs()
+
+    def _valid_cardinal_dirs(self, tile_x: int, tile_y: int) -> list[int]:
+        eng = self.engine
+        valid = []
+        for cdir, (dx, dy) in self._CARDINAL_TO_VEC.items():
+            nx, ny = tile_x + dx, tile_y + dy
+            if 0 <= nx < eng.maze.width and 0 <= ny < eng.maze.height and eng.maze.maze[ny][nx] == 0:
+                valid.append(cdir)
+        return valid
+
+    def get_valid_actions(self) -> list[int]:
+        """Return only physically valid egocentric actions from current tile/heading."""
+        if self.engine is None:
+            return [self.FORWARD, self.LEFT, self.RIGHT, self.BACKWARD]
+
+        ts = self.engine.tile_size
+        px = self.engine.pacman.x + self.engine.pacman.size // 2
+        py = self.engine.pacman.y + self.engine.pacman.size // 2
+        tx, ty = int(px // ts), int(py // ts)
+        heading = self._get_pacman_heading_cardinal()
+        valid_dirs = self._valid_cardinal_dirs(tx, ty)
+
+        left_map = {
+            self.UP: self.LEFT_C,
+            self.DOWN: self.RIGHT_C,
+            self.LEFT_C: self.DOWN,
+            self.RIGHT_C: self.UP,
+        }
+        right_map = {
+            self.UP: self.RIGHT_C,
+            self.DOWN: self.LEFT_C,
+            self.LEFT_C: self.UP,
+            self.RIGHT_C: self.DOWN,
+        }
+        backward_map = {
+            self.UP: self.DOWN,
+            self.DOWN: self.UP,
+            self.LEFT_C: self.RIGHT_C,
+            self.RIGHT_C: self.LEFT_C,
+        }
+
+        action_to_dir = {
+            self.FORWARD: heading,
+            self.LEFT: left_map[heading],
+            self.RIGHT: right_map[heading],
+            self.BACKWARD: backward_map[heading],
+        }
+
+        actions = [a for a, target in action_to_dir.items() if target in valid_dirs]
+        # In straight corridors (only forward/backward valid), force forward-only.
+        opposite = self._CARDINAL_OPPOSITE[heading]
+        if len(valid_dirs) == 2 and heading in valid_dirs and opposite in valid_dirs:
+            return [self.FORWARD]
+        return actions if actions else [self.FORWARD, self.LEFT, self.RIGHT, self.BACKWARD]
+
+
+    def _bfs_shortest_path_distances(self, start_tx: int, start_ty: int) -> dict[tuple[int, int], int]:
+        """Return shortest path length in tiles from Pac-Man tile to reachable maze tiles."""
+        eng = self.engine
+        maze = eng.maze
+
+        if not (0 <= start_tx < maze.width and 0 <= start_ty < maze.height):
+            return {}
+
+        distances: dict[tuple[int, int], int] = {(start_tx, start_ty): 0}
+        queue = deque([(start_tx, start_ty)])
+
+        while queue:
+            cx, cy = queue.popleft()
+            base_dist = distances[(cx, cy)]
+            for dx, dy in ((0, -1), (0, 1), (-1, 0), (1, 0)):
+                nx, ny = cx + dx, cy + dy
+                if not (0 <= nx < maze.width and 0 <= ny < maze.height):
+                    continue
+                if (nx, ny) in distances:
+                    continue
+                # Pac-Man shortest path should respect passable floor only.
+                if maze.maze[ny][nx] != 0:
+                    continue
+                distances[(nx, ny)] = base_dist + 1
+                queue.append((nx, ny))
+
+        return distances
 
     def _get_vector_obs(self) -> np.ndarray:
         eng = self.engine
@@ -220,20 +310,20 @@ class PacManEnv(gym.Env):
                 d += 1
 
                 if not (0 <= cx < eng.maze.width and 0 <= cy < eng.maze.height) or eng.maze.maze[cy][cx] == 1:
-                    w_d = 1.0 / d
+                    w_d = 1.0 / (1.0 + d)
                     break
 
                 if f_d == 0.0 and (cx, cy) in food_tiles:
-                    f_d = 1.0 / d
+                    f_d = 1.0 / (1.0 + d)
 
                 if p_d == 0.0 and (cx, cy) in power_tiles:
-                    p_d = 1.0 / d
+                    p_d = 1.0 / (1.0 + d)
 
                 if g_d == 0.0:
                     if (cx, cy) in lethal_ghost_tiles:
-                        g_d = 1.0 / d
+                        g_d = 1.0 / (1.0 + d)
                     elif (cx, cy) in edible_ghost_tiles:
-                        g_d = -1.0 / d
+                        g_d = -1.0 / (1.0 + d)
 
             global_rays.extend([w_d, f_d, p_d, g_d])
 
@@ -249,22 +339,60 @@ class PacManEnv(gym.Env):
         obs = []
         for idx in order:
             base = idx * 4
-            obs.extend(global_rays[base : base + 4])
+            obs.extend(global_rays[base: base + 4])
 
-        max_ft = getattr(eng, "max_frightened_time", None)
-        cur_ft = getattr(eng, "frightened_time", 0)
-        if max_ft is None or max_ft <= 0:
-            frightened_val = 1.0 if eng.frightened_mode else 0.0
-        else:
-            frightened_val = max(0.0, min(1.0, float(cur_ft) / float(max_ft)))
-        obs.append(frightened_val)
+        if not hasattr(self, "_bfs_cache"):
+            self._bfs_cache = {}
 
-        norm_x = tx / max(1, (eng.maze.width - 1))
-        norm_y = ty / max(1, (eng.maze.height - 1))
-        obs.append(float(norm_x))
-        obs.append(float(norm_y))
+        key = (tx, ty)
+        if key not in self._bfs_cache:
+            self._bfs_cache[key] = self._bfs_shortest_path_distances(tx, ty)
 
-        return np.array(obs, dtype=np.float32)
+        sp_dist = self._bfs_cache[key]
+
+        def inv_nearest(target_tiles: set[tuple[int, int]]) -> float:
+            if not target_tiles:
+                return 0.0
+            best = float("inf")
+            for tile in target_tiles:
+                d = sp_dist.get(tile)
+                if d is not None and d < best:
+                    best = d
+            if best == float("inf"):
+                return 0.0
+            return 1.0 / (1.0 + float(best))
+
+        obs.append(inv_nearest(food_tiles))
+        obs.append(inv_nearest(lethal_ghost_tiles))
+
+        is_powered = 1.0 if eng.frightened_mode else 0.0
+        power_remaining = 0.0
+        if eng.frightened_mode and getattr(eng, "frightened_duration", 0) > 0:
+            remain = max(0, eng.frightened_duration - eng.frightened_timer)
+            power_remaining = max(0.0, min(1.0, float(remain) / float(eng.frightened_duration)))
+
+        obs.append(is_powered)
+        obs.append(power_remaining)
+
+        obs = np.array(obs, dtype=np.float32)
+
+        # Normalize non-ghost channels from [0,1] to [-1,1].
+        for i in range(8):
+            base = i * 4
+            obs[base + 0] = 2.0 * obs[base + 0] - 1.0  # wall
+            obs[base + 1] = 2.0 * obs[base + 1] - 1.0  # food
+            obs[base + 2] = 2.0 * obs[base + 2] - 1.0  # power
+            # obs[base + 3] ghost_signal stays signed
+
+        # BFS nearest distances.
+        obs[32] = 2.0 * obs[32] - 1.0
+        obs[33] = 2.0 * obs[33] - 1.0
+
+        # Power-state context.
+        obs[34] = 2.0 * obs[34] - 1.0
+        obs[35] = 2.0 * obs[35] - 1.0
+
+        return obs
 
     def step(self, action: int):
         assert self.action_space.contains(action), f"Invalid action {action}"
@@ -274,6 +402,10 @@ class PacManEnv(gym.Env):
 
         # 1. Map egocentric action to cardinal direction ONCE
         heading = self._get_pacman_heading_cardinal()
+
+        valid_actions = self.get_valid_actions()
+        if action not in valid_actions:
+            action = int(np.random.choice(valid_actions))
 
         left_map = {
             self.UP: self.LEFT_C,
@@ -286,6 +418,7 @@ class PacManEnv(gym.Env):
             self.DOWN: self.LEFT_C,
             self.LEFT_C: self.UP,
             self.RIGHT_C: self.DOWN,
+
         }
         backward_map = {
             self.UP: self.DOWN,
@@ -303,63 +436,27 @@ class PacManEnv(gym.Env):
         else:
             target_dir = backward_map[heading]
 
-        prev_dir = self._last_cardinal_dir
-        prev_action = self._last_action
         self._last_action = int(action)
         self._last_cardinal_dir = target_dir
         eng.pacman.next_direction = self._CARDINAL_TO_VEC[target_dir]
 
         accumulated_reward = 0.0
+
         reward_breakdown = {
-            "reversal_penalty": 0.0,
-            "blocked_penalty": 0.0,
-            "time_penalty": 0.0,
             "pellet_reward": 0.0,
             "power_reward": 0.0,
             "ghost_reward": 0.0,
             "win_reward": 0.0,
             "death_penalty": 0.0,
             "starvation_penalty": 0.0,
-            "exploration_reward": 0.0,
-            "revisit_penalty": 0.0,
-            "food_shaping": 0.0,
-            "ghost_pressure": 0.0,
-            "frightened_chase": 0.0,
             "total": 0.0,
         }
 
-        # Penalize immediate reversals to break forward/backward oscillation loops.
-        opposite = self._CARDINAL_OPPOSITE[prev_dir]
-        reversal_flag = bool(target_dir == opposite)
-        if target_dir == opposite:
-            accumulated_reward -= 0.1
-            reward_breakdown["reversal_penalty"] -= 0.1
-
-        # --- Safe Distance Calculation Helpers ---
-        def get_min_dist(pac_tx, pac_ty, entities):
-            if not entities: return float('inf')
-            return min(abs(pac_tx - int(e[0] // ts)) + abs(pac_ty - int(e[1] // ts)) for e in entities)
-
-        def get_min_ghost_dist(pac_tx, pac_ty, frightened=False):
-            if not eng.ghosts: return float('inf')
-            target_ghosts = []
-            for g in eng.ghosts:
-                if g.state == GhostState.EATEN: continue
-                if frightened and g.state == GhostState.FRIGHTENED:
-                    target_ghosts.append(g)
-                elif not frightened and g.state != GhostState.FRIGHTENED:
-                    target_ghosts.append(g)
-            if not target_ghosts: return float('inf')
-            return min(abs(pac_tx - int(g.x // ts)) + abs(pac_ty - int(g.y // ts)) for g in target_ghosts)
-
-        # Pre-loop distances and Topo-Lock tracking
+        # Pre-loop topo-lock tracking
         px_start = eng.pacman.x + eng.pacman.size // 2
         py_start = eng.pacman.y + eng.pacman.size // 2
         start_tx = int(px_start // ts)
         start_ty = int(py_start // ts)
-
-        prev_food_dist = get_min_dist(start_tx, start_ty, eng.pellets)
-        prev_frightened_dist = get_min_ghost_dist(start_tx, start_ty, frightened=True)
 
         # 2. THE TILE-LOCK LOOP
         #
@@ -378,7 +475,6 @@ class PacManEnv(gym.Env):
         starved = False
         terminated = False
         truncated = False
-        blocked_or_invalid = False
         while True:
             pre_lives = eng.lives
             pre_won = eng.won
@@ -388,13 +484,14 @@ class PacManEnv(gym.Env):
 
             pre_pac_x = eng.pacman.x
             pre_pac_y = eng.pacman.y
+            pre_px_center = pre_pac_x + eng.pacman.size // 2
+            pre_py_center = pre_pac_y + eng.pacman.size // 2
             eng.update()
             internal_ticks += 1
             self._step_count += 1
             self._ticks_since_food += 1
 
-            reward_tick = -0.01  # normalized time pressure
-            reward_breakdown["time_penalty"] += -0.01
+            reward_tick = -0.01
 
             # Pellets
             pellets_eaten = max(0, pre_pellets - len(eng.pellets))
@@ -404,6 +501,7 @@ class PacManEnv(gym.Env):
                 reward_breakdown["pellet_reward"] += pellet_gain
                 self._ticks_since_food = 0
                 self.pellets_eaten_this_episode += pellets_eaten
+                self._bfs_cache.clear()
 
             # Power pellets
             power_eaten = max(0, pre_power - len(eng.power_pellets))
@@ -413,6 +511,7 @@ class PacManEnv(gym.Env):
                 reward_breakdown["power_reward"] += power_gain
                 self._ticks_since_food = 0
                 self.power_pellets_eaten_this_episode += power_eaten
+                self._bfs_cache.clear()
 
             # Ghosts
             ghosts_eaten = max(0, sum(1 for g in eng.ghosts if g.state == GhostState.EATEN) - pre_eaten)
@@ -434,38 +533,39 @@ class PacManEnv(gym.Env):
             # Starvation
             starved = self._ticks_since_food >= self.starvation_limit
             if starved:
-                reward_tick -= 25.0  # reduced (less overlap with time penalty)
+                reward_tick -= 25.0
                 reward_breakdown["starvation_penalty"] -= 25.0
 
             accumulated_reward += reward_tick
 
             terminated = eng.game_over or eng.won or starved
-            truncated = self._step_count >= self.max_episode_steps
+            truncated = (self.max_episode_steps is not None) and (self._step_count >= self.max_episode_steps)
 
             if terminated or truncated:
                 break
 
-            # Break Condition (Topological Node / Tile-Centre Fix)
+            # Break Condition (Exact Tile-Centre Lock)
             px = eng.pacman.x + eng.pacman.size // 2
             py = eng.pacman.y + eng.pacman.size // 2
             cur_tx = int(px // ts)
             cur_ty = int(py // ts)
 
-            offset_x = px % ts
-            offset_y = py % ts
-            tolerance = max(eng.pacman.speed, 2)
-
-            # Only treat this as a new decision point once we've actually
-            # *left* the starting tile and are very close to the new tile
-            # centre. We deliberately do NOT update (start_tx, start_ty)
-            # inside the loop so that exactly one break occurs per tile
-            # transition.
+            # Only return control once we've left the starting tile and
+            # reached (or crossed) the exact centre of the new tile.
             if (cur_tx != start_tx) or (cur_ty != start_ty):
-                if abs(offset_x - ts // 2) <= tolerance and abs(offset_y - ts // 2) <= tolerance:
-                    # Snap perfectly to the NEW tile's centre to remove any
-                    # accumulated sub-tile drift.
-                    eng.pacman.x = (cur_tx * ts) + (ts // 2) - (eng.pacman.size // 2)
-                    eng.pacman.y = (cur_ty * ts) + (ts // 2) - (eng.pacman.size // 2)
+                center_x = (cur_tx * ts) + (ts // 2)
+                center_y = (cur_ty * ts) + (ts // 2)
+
+                on_center = (px == center_x and py == center_y)
+                crossed_center = (
+                    (pre_px_center - center_x) * (px - center_x) <= 0
+                    and (pre_py_center - center_y) * (py - center_y) <= 0
+                )
+
+                if on_center or crossed_center:
+                    # Snap to exact geometric centre of the NEW tile.
+                    eng.pacman.x = center_x - (eng.pacman.size // 2)
+                    eng.pacman.y = center_y - (eng.pacman.size // 2)
                     break
 
             # If no movement happened this tick, count it and fail safe after
@@ -476,7 +576,6 @@ class PacManEnv(gym.Env):
                 no_progress_ticks = 0
 
             if no_progress_ticks >= max_no_progress_ticks:
-                blocked_or_invalid = True
                 eng.pacman.x = (cur_tx * ts) + (ts // 2) - (eng.pacman.size // 2)
                 eng.pacman.y = (cur_ty * ts) + (ts // 2) - (eng.pacman.size // 2)
                 break
@@ -484,7 +583,6 @@ class PacManEnv(gym.Env):
             # Safety catch: if movement stalls, return control to the policy
             # from this centred tile instead of auto-picking a direction.
             if eng.pacman.direction == (0, 0):
-                blocked_or_invalid = True
                 eng.pacman.x = (cur_tx * ts) + (ts // 2) - (eng.pacman.size // 2)
                 eng.pacman.y = (cur_ty * ts) + (ts // 2) - (eng.pacman.size // 2)
                 break
@@ -495,48 +593,13 @@ class PacManEnv(gym.Env):
         cur_tx = int(px // ts)
         cur_ty = int(py // ts)
 
-        accumulated_reward /= max(1, internal_ticks)
-
-        if blocked_or_invalid:
-            accumulated_reward -= 0.1
-            reward_breakdown["blocked_penalty"] -= 0.1
-
-
         # --- Exploration (new tile bonus + revisit penalty) ---
         tile_key = (cur_tx, cur_ty)
         visit_count = self._visit_counts.get(tile_key, 0) + 1
         self._visit_counts[tile_key] = visit_count
 
-        is_new = tile_key not in self._visited_tiles
-        if is_new:
-            accumulated_reward += 0.05
-            reward_breakdown["exploration_reward"] += 0.05
+        if tile_key not in self._visited_tiles:
             self._visited_tiles.add(tile_key)
-        else:
-            revisit_penalty = -0.02 * min(visit_count, 5)
-            accumulated_reward += revisit_penalty
-            reward_breakdown["revisit_penalty"] += revisit_penalty
-
-        # --- Food shaping ---
-        curr_food_dist = get_min_dist(cur_tx, cur_ty, eng.pellets)
-        if curr_food_dist < prev_food_dist and curr_food_dist != float('inf'):
-            accumulated_reward += 0.05
-            reward_breakdown["food_shaping"] += 0.05
-
-        # --- Ghost avoidance ---
-        if not eng.frightened_mode:
-            ghost_dist = get_min_ghost_dist(cur_tx, cur_ty, frightened=False)
-            if ghost_dist != float('inf'):
-                ghost_pressure = -1.0 / max(1, ghost_dist)
-                accumulated_reward += ghost_pressure
-                reward_breakdown["ghost_pressure"] += ghost_pressure
-
-        # --- Ghost chasing (frightened mode) ---
-        if eng.frightened_mode:
-            curr_frightened_dist = get_min_ghost_dist(cur_tx, cur_ty, frightened=True)
-            if curr_frightened_dist < prev_frightened_dist and curr_frightened_dist != float('inf'):
-                accumulated_reward += 0.1
-                reward_breakdown["frightened_chase"] += 0.1
 
         reward_breakdown["total"] = float(accumulated_reward)
 
@@ -558,13 +621,11 @@ class PacManEnv(gym.Env):
             # Debug/analysis fields
             "internal_ticks": internal_ticks,
             "tile_center": (cur_tx, cur_ty),
+            "center_lock_mode": "exact",
             # Total high-level environment steps taken so far in this episode
             "steps": int(self._step_count),
             "action": int(action),
-            "prev_action": int(prev_action) if prev_action is not None else None,
             "target_dir": int(target_dir),
-            "reversal": reversal_flag,
-            "blocked_action": blocked_or_invalid,
             "visit_count": int(visit_count),
             "reward_breakdown": reward_breakdown,
         })

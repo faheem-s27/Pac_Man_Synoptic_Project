@@ -49,20 +49,26 @@ CONFIG_PATH      = os.path.join(_HERE, "neat_config.cfg") # Matched your previou
 PARALLEL         = True
 
 NODE_NAMES = {
-    # ── Pac-Man State ──
-    -1: "Pac_dX", -2: "Pac_dY",
-    # ── Closest Ghost 1 ──
-    -3: "G1_relX", -4: "G1_relY", -5: "G1_Threat",
-    # ── Closest Ghost 2 ──
-    -6: "G2_relX", -7: "G2_relY", -8: "G2_Threat",
-    # ── Radar & Walls ──
-    -9: "Pellet_relX", -10: "Pellet_relY",
-    -11: "Wall_Up", -12: "Wall_Down", -13: "Wall_Left", -14: "Wall_Right",
-    # ── Power Pellet ──
-    -15: "PP_relX", -16: "PP_relY",
-    # ── Outputs ──
-    0: "UP", 1: "DOWN", 2: "LEFT", 3: "RIGHT"
+    # ── Outputs (egocentric) ──
+    0: "FORWARD", 1: "LEFT", 2: "RIGHT", 3: "BACKWARD"
 }
+
+
+def _settings_for_generation(generation: int) -> dict:
+    """Map generation ranges to curriculum stages and return matching settings."""
+    if generation < 50:
+        CURRICULUM.current_stage = 0
+    elif generation < 100:
+        CURRICULUM.current_stage = 1
+    elif generation < 180:
+        CURRICULUM.current_stage = 2
+    elif generation < 260:
+        CURRICULUM.current_stage = 3
+    elif generation < 360:
+        CURRICULUM.current_stage = 4
+    else:
+        CURRICULUM.current_stage = 5
+    return CURRICULUM.get_settings()
 
 def plot_learning_curve(statistics, filename="checkpoints/learning_curve.png"):
     """
@@ -166,9 +172,9 @@ def eval_genome(genome, config):
 
         try:
             while True:
-                # Pass the 40-element vector to the neural network
                 outputs = net.activate(obs.tolist())
-                action = int(np.argmax(outputs))
+                valid_actions = env.get_valid_actions()
+                action = max(valid_actions, key=lambda a: outputs[a]) if valid_actions else int(np.argmax(outputs))
 
                 obs, reward, terminated, truncated, _ = env.step(action)
                 total_reward += reward
@@ -229,6 +235,21 @@ def run(checkpoint: str | None = None):
         CONFIG_PATH,
     )
 
+    probe_settings = _settings_for_generation(0)
+    probe_env = PacManEnv(render_mode=None, obs_type="vector", settings=probe_settings)
+    probe_obs, _ = probe_env.reset(seed=123)
+    obs_dim = len(probe_obs)
+    action_dim = int(getattr(probe_env.action_space, "n", 4))
+    probe_env.close()
+    if config.genome_config.num_inputs != obs_dim:
+        raise ValueError(
+            f"NEAT config num_inputs={config.genome_config.num_inputs} does not match PacManEnv obs_dim={obs_dim}."
+        )
+    if config.genome_config.num_outputs != action_dim:
+        raise ValueError(
+            f"NEAT config num_outputs={config.genome_config.num_outputs} does not match action_dim={action_dim}."
+        )
+
     # Create or restore population
     if checkpoint and os.path.exists(checkpoint):
         print(f"Resuming from checkpoint: {checkpoint}")
@@ -270,7 +291,7 @@ def run(checkpoint: str | None = None):
     for _ in range(NUM_GENERATIONS):
         # 1. Update global settings for this generation
         gen_id = population.generation
-        CURRENT_SETTINGS = CURRICULUM.get_settings_for_generation(gen_id)
+        CURRENT_SETTINGS = _settings_for_generation(gen_id)
 
         # 2. Run ONE generation
         # 'winner' will be updated every generation, but we only care about the final one
