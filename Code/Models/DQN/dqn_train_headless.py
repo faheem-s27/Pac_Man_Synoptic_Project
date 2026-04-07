@@ -1,6 +1,7 @@
 import os
 import sys
 import torch
+import numpy as np
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _ROOT = os.path.dirname(os.path.dirname(os.path.dirname(_HERE)))
@@ -12,6 +13,7 @@ from Code.CurriculumManager import CurriculumManager
 from dqn_agent import DQNAgent
 from eval_dqn import evaluate_model
 from checkpoint_utils import save_checkpoint, load_checkpoint
+from action_masking_wrapper import DQNActionMaskingWrapper
 
 # ── Configuration ──
 TARGET_UPDATE_FREQUENCY = 1000
@@ -32,8 +34,8 @@ def train():
     else:
         print(f"[DQN][Headless] max_episode_steps={DQN_MAX_EPISODE_STEPS} -> max-step truncation enabled.")
 
-    # Egocentric 36-dim observation, 4 relative actions (F,L,R,B)
-    agent = DQNAgent(input_dim=36, output_dim=4)
+    # Egocentric 21-dim observation, 4 relative actions (F,L,R,B)
+    agent = DQNAgent(input_dim=21, output_dim=4)
     print(f"Agent initialized on: {agent.device}")
 
     total_steps = 0
@@ -68,7 +70,7 @@ def train():
         current_settings['maze_seed'] = dynamic_seed
         current_settings['max_episode_steps'] = DQN_MAX_EPISODE_STEPS
 
-        env = PacManEnv(render_mode=None, **current_settings)
+        env = DQNActionMaskingWrapper(PacManEnv(render_mode=None, **current_settings))
         state, _ = env.reset(seed=dynamic_seed)
 
         total_reward = 0.0
@@ -76,14 +78,36 @@ def train():
         done = False
 
         while not done:
-            # Egocentric 4-action selection (0:F,1:L,2:R,3:B) with corridor reverse masking.
-            action = agent.select_action(state, valid_actions=env.get_valid_actions())
+            valid_actions = env.get_valid_actions()
+            policy_action, exploring = agent.select_action(
+                state,
+                valid_actions=valid_actions,
+                return_exploration=True,
+            )
+            action = env.pick_action(policy_action, exploring=exploring)
 
-            next_state, reward, terminated, truncated, _ = env.step(action)
+            next_state, reward, terminated, truncated, info = env.step(action)
             done = terminated or truncated
             total_reward += reward
 
-            agent.memory.push(state, action, reward, next_state, done)
+            internal_ticks_step = int(info.get("internal_ticks", 0)) if isinstance(info, dict) else 0
+            step_ticks = max(1, internal_ticks_step)
+            next_valid_actions = env.get_valid_actions()
+            next_valid_mask = np.zeros(agent.action_dim, dtype=np.float32)
+            for a in next_valid_actions:
+                if 0 <= int(a) < agent.action_dim:
+                    next_valid_mask[int(a)] = 1.0
+            discount_pow = float(agent.gamma ** step_ticks)
+
+            agent.memory.push(
+                state,
+                action,
+                reward,
+                next_state,
+                done,
+                next_valid_mask=next_valid_mask,
+                discount_pow=discount_pow,
+            )
 
             loss = agent.optimize_model(batch_size=BATCH_SIZE)
             if loss is not None:
@@ -109,7 +133,7 @@ def train():
         curriculum.update_performance(won)
         promoted = curriculum.check_promotion()
         if promoted:
-            agent.epsilon = max(agent.epsilon, 0.2)
+            agent.apply_exploration_jolt(min_epsilon=0.2, duration_steps=50_000)
 
         env.close()
 

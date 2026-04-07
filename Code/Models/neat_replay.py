@@ -23,7 +23,7 @@ import random
 import neat
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
-_ROOT = os.path.dirname(_HERE)
+_ROOT = os.path.dirname(os.path.dirname(_HERE))
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
@@ -34,25 +34,20 @@ from Code.CurriculumManager import CurriculumManager
 # ── Config ───────────────────────────────────────────────────────────────────
 # _HERE is Code/Models/ — game_settings.json lives one level up in Code/
 _SETTINGS      = Settings(os.path.join(_ROOT, "Code", "game_settings.json")).get_all()
-MAZE_ALGORITHM = "recursive_backtracking"
 CONFIG_PATH    = os.path.join(_HERE, "neat_config.cfg")
 ACTION_NAMES   = {0: "FORWARD", 1: "LEFT", 2: "RIGHT", 3: "BACKWARD"}
+NEAT_MAX_EPISODE_STEPS = None
 
 
 def _settings_for_generation(cm: CurriculumManager, generation: int) -> dict:
-    if generation < 50:
-        cm.current_stage = 0
-    elif generation < 100:
-        cm.current_stage = 1
-    elif generation < 180:
-        cm.current_stage = 2
-    elif generation < 260:
-        cm.current_stage = 3
-    elif generation < 360:
-        cm.current_stage = 4
-    else:
-        cm.current_stage = 5
-    return cm.get_settings()
+    stage_count = max(1, len(cm.stage_profiles))
+    # Replay accepts an absolute generation number, so map by fixed generation span per stage.
+    stage_span = 50
+    stage_idx = min(stage_count - 1, max(0, int(generation // stage_span)))
+    cm.current_stage = stage_idx
+    settings = cm.get_settings()
+    settings["max_episode_steps"] = NEAT_MAX_EPISODE_STEPS
+    return settings
 
 
 def replay(genome_path: str, test_generalisation: bool, generation: int):
@@ -109,8 +104,7 @@ def replay(genome_path: str, test_generalisation: bool, generation: int):
         render_mode="human",
         obs_type="vector",
         maze_seed=eval_seed,
-        maze_algorithm=MAZE_ALGORITHM,
-        settings=curriculum_settings
+        settings=curriculum_settings,
     )
 
     obs, _ = env.reset()

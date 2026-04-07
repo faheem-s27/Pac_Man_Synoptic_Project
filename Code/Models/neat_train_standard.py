@@ -26,7 +26,7 @@ import graphviz
 
 # ── Path setup ───────────────────────────────────────────────────────────────
 _HERE = os.path.dirname(os.path.abspath(__file__))
-_ROOT = os.path.dirname(_HERE)
+_ROOT = os.path.dirname(os.path.dirname(_HERE))
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
@@ -38,7 +38,7 @@ _SETTINGS_PATH = os.path.join(_ROOT, "Code", "game_settings.json")
 FIXED_SETTINGS = Settings(_SETTINGS_PATH).get_all()
 
 # ── Config ───────────────────────────────────────────────────────────────────
-MAX_STEPS       = 2000
+NEAT_MAX_EPISODE_STEPS = None
 NUM_GENERATIONS = 300
 CHECKPOINT_DIR  = os.path.join(_HERE, "checkpoints_standard")
 CONFIG_PATH     = os.path.join(_HERE, "neat_config.cfg")
@@ -123,12 +123,13 @@ def eval_genome(genome, config):
     eval_seeds = [np.random.randint(0, 10000) for _ in range(3)]
 
     for seed in eval_seeds:
+        env_settings = dict(FIXED_SETTINGS)
+        env_settings["maze_seed"] = seed
+        env_settings["max_episode_steps"] = NEAT_MAX_EPISODE_STEPS
         env = PacManEnv(
             render_mode=None,
             obs_type="vector",
-            maze_seed=seed,
-            maze_algorithm="recursive_backtracking",
-            settings=FIXED_SETTINGS  # Full difficulty, always
+            settings=env_settings,
         )
 
         obs, _ = env.reset()
@@ -194,7 +195,9 @@ def run(checkpoint: str | None = None):
     )
 
     # Guard against stale NEAT configs when PacManEnv observation/action schema changes.
-    probe_env = PacManEnv(render_mode=None, obs_type="vector", settings=FIXED_SETTINGS)
+    probe_settings = dict(FIXED_SETTINGS)
+    probe_settings["max_episode_steps"] = NEAT_MAX_EPISODE_STEPS
+    probe_env = PacManEnv(render_mode=None, obs_type="vector", settings=probe_settings)
     probe_obs, _ = probe_env.reset(seed=123)
     obs_dim = len(probe_obs)
     action_dim = int(getattr(probe_env.action_space, "n", 4))

@@ -18,6 +18,8 @@ import pickle
 import argparse
 import multiprocessing
 import numpy as np
+import csv
+from datetime import datetime
 
 import neat
 import matplotlib.pyplot as plt
@@ -25,7 +27,7 @@ import graphviz
 
 # ── Path setup ───────────────────────────────────────────────────────────────
 _HERE = os.path.dirname(os.path.abspath(__file__))
-_ROOT = os.path.dirname(_HERE)
+_ROOT = os.path.dirname(os.path.dirname(_HERE))
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
@@ -42,11 +44,14 @@ CURRICULUM = CurriculumManager()
 
 # ── Config ───────────────────────────────────────────────────────────────────
 # We define a static evaluation suite to ensure fair comparison across generations
-MAX_STEPS        = 2000          # Increased to allow for multi-level survival
+NEAT_MAX_EPISODE_STEPS = None
 NUM_GENERATIONS  = 500
 CHECKPOINT_DIR   = os.path.join(_HERE, "checkpoints")
 CONFIG_PATH      = os.path.join(_HERE, "neat_config.cfg") # Matched your previous filename
 PARALLEL         = True
+LOG_DIR          = os.path.join(_HERE, "csv_history")
+RUN_TIMESTAMP    = datetime.now().strftime("%d-%m_%H-%M-%S")
+LOG_PATH         = os.path.join(LOG_DIR, f"neat_curriculum_log_{RUN_TIMESTAMP}.csv")
 
 NODE_NAMES = {
     # ── Outputs (egocentric) ──
@@ -55,20 +60,65 @@ NODE_NAMES = {
 
 
 def _settings_for_generation(generation: int) -> dict:
-    """Map generation ranges to curriculum stages and return matching settings."""
-    if generation < 50:
-        CURRICULUM.current_stage = 0
-    elif generation < 100:
-        CURRICULUM.current_stage = 1
-    elif generation < 180:
-        CURRICULUM.current_stage = 2
-    elif generation < 260:
-        CURRICULUM.current_stage = 3
-    elif generation < 360:
-        CURRICULUM.current_stage = 4
+    """Map generation progress across all curriculum stages and return settings."""
+    stage_count = max(1, len(CURRICULUM.stage_profiles))
+    if NUM_GENERATIONS <= 1:
+        stage_idx = 0
     else:
-        CURRICULUM.current_stage = 5
-    return CURRICULUM.get_settings()
+        progress = max(0.0, min(1.0, float(generation) / float(NUM_GENERATIONS - 1)))
+        stage_idx = min(stage_count - 1, int(progress * stage_count))
+    CURRICULUM.current_stage = stage_idx
+    settings = CURRICULUM.get_settings()
+    settings["max_episode_steps"] = NEAT_MAX_EPISODE_STEPS
+    return settings
+
+
+def _init_csv_log() -> None:
+    os.makedirs(LOG_DIR, exist_ok=True)
+    if os.path.exists(LOG_PATH):
+        return
+    with open(LOG_PATH, mode="w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow([
+            "Algorithm", "Episode", "Stage", "Maze_Seed", "Reward", "Macro_Steps", "Micro_Ticks",
+            "Outcome", "Win", "Epsilon", "Pellets", "Power_Pellets",
+            "Ghosts", "Explore_Rate", "Avg_Loss",
+            "Generation", "Best_Fitness", "Avg_Fitness", "Species_Count", "Eval_Seeds_Per_Genome", "Max_Episode_Steps",
+        ])
+
+
+def _append_csv_log(
+    generation: int,
+    stage: int,
+    best_fitness: float,
+    avg_fitness: float,
+    species_count: int,
+) -> None:
+    with open(LOG_PATH, mode="a", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow([
+            "NEAT",
+            int(generation),
+            int(stage),
+            -1,
+            float(best_fitness),
+            0,
+            0,
+            "GEN_END",
+            0,
+            0.0,
+            0,
+            0,
+            0,
+            0.0,
+            float(avg_fitness),
+            int(generation),
+            float(best_fitness),
+            float(avg_fitness),
+            int(species_count),
+            3,
+            NEAT_MAX_EPISODE_STEPS,
+        ])
 
 def plot_learning_curve(statistics, filename="checkpoints/learning_curve.png"):
     """
@@ -161,10 +211,8 @@ def eval_genome(genome, config):
         env = PacManEnv(
             render_mode=None,
             obs_type="vector",
+            settings=CURRENT_SETTINGS,
             maze_seed=seed,
-            maze_algorithm="recursive_backtracking",
-            settings=CURRENT_SETTINGS,  # <-- New: Dynamic Curriculum Settings
-            max_episode_steps=MAX_STEPS,
         )
 
         obs, _ = env.reset()
@@ -222,6 +270,7 @@ class BestGenomeSaver(neat.reporting.BaseReporter):
 
 def run(checkpoint: str | None = None):
     os.makedirs(CHECKPOINT_DIR, exist_ok=True)
+    _init_csv_log()
 
     if not os.path.exists(CONFIG_PATH):
         raise FileNotFoundError(f"NEAT config file not found at {CONFIG_PATH}")
@@ -259,7 +308,8 @@ def run(checkpoint: str | None = None):
 
     # Reporters
     population.add_reporter(neat.StdOutReporter(True))
-    population.add_reporter(neat.StatisticsReporter())
+    stats_reporter = neat.StatisticsReporter()
+    population.add_reporter(stats_reporter)
     population.add_reporter(
         neat.Checkpointer(
             generation_interval=10,
@@ -287,6 +337,7 @@ def run(checkpoint: str | None = None):
     # Manual Curriculum Loop
     # We run 1 generation at a time so we can update settings dynamically
     print(f"\nStarting Curriculum Training for {NUM_GENERATIONS} generations...")
+    print(f"CSV logging enabled -> {LOG_PATH}")
 
     for _ in range(NUM_GENERATIONS):
         # 1. Update global settings for this generation
@@ -297,6 +348,19 @@ def run(checkpoint: str | None = None):
         # 'winner' will be updated every generation, but we only care about the final one
         winner = population.run(eval_function, 1)
 
+        if stats_reporter.most_fit_genomes:
+            gen_best = float(stats_reporter.most_fit_genomes[-1].fitness)
+            fitness_means = stats_reporter.get_fitness_mean()
+            gen_avg = float(fitness_means[-1]) if fitness_means else gen_best
+            species_count = len(getattr(population.species, "species", {}))
+            _append_csv_log(
+                generation=gen_id,
+                stage=CURRICULUM.current_stage,
+                best_fitness=gen_best,
+                avg_fitness=gen_avg,
+                species_count=species_count,
+            )
+
     # Save final winner
     winner_path = os.path.join(CHECKPOINT_DIR, "winner_genome.pkl")
     with open(winner_path, "wb") as f:
@@ -304,7 +368,7 @@ def run(checkpoint: str | None = None):
     print(f"\nEvolution Complete. Winner saved → {winner_path}")
     print(f"Maximum Fitness Achieved: {winner.fitness:.1f}")
 
-    plot_learning_curve(population.reporters.reporters[1])
+    plot_learning_curve(stats_reporter)
 
 
 if __name__ == "__main__":

@@ -1,7 +1,7 @@
 """
 dqn_train_visual.py
 ===================
-Egocentric 36-input DQN visual trainer.
+Egocentric 21-input DQN visual trainer.
 """
 
 import sys
@@ -22,6 +22,7 @@ from Code.PacManEnv import PacManEnv
 from Code.CurriculumManager import CurriculumManager
 from dqn_agent import DQNAgent
 from checkpoint_utils import save_checkpoint, load_checkpoint
+from action_masking_wrapper import DQNActionMaskingWrapper
 
 MAX_WINDOW_W = 800
 MAX_WINDOW_H = 800
@@ -37,6 +38,8 @@ SAVE_EVERY_EPISODES = 50
 INCLUDE_CURRICULUM_STATE = True
 # For DQN runs we prefer starvation/game-over as terminal causes over max-step truncation.
 DQN_MAX_EPISODE_STEPS = None
+# Scale raw env rewards before replay insertion for DQN target stability.
+DQN_REWARD_SCALE = 100.0
 
 ACTION_NAMES = ['FORWARD', 'LEFT', 'RIGHT', 'BACKWARD']
 CARDINAL_TO_VEC = {
@@ -47,7 +50,6 @@ CARDINAL_TO_VEC = {
 }
 RAY_DIRS = [
     (0, -1), (0, 1), (-1, 0), (1, 0),
-    (-1, -1), (1, -1), (-1, 1), (1, 1),
 ]
 
 # Runtime speed presets for visual training loop (decision steps per second).
@@ -164,7 +166,7 @@ def run_visual_dqn():
     win_w = MAX_WINDOW_W + DASHBOARD_W
     win_h = MAX_WINDOW_H + INFO_BAR_H
     window = pygame.display.set_mode((win_w, win_h))
-    pygame.display.set_caption("DQN Pac-Man — Egocentric 36D")
+    pygame.display.set_caption("DQN Pac-Man — Egocentric 21D")
 
     info_font = pygame.font.Font(None, 28)
     dash_font = pygame.font.Font(None, 22)
@@ -175,8 +177,9 @@ def run_visual_dqn():
     curriculum = CurriculumManager()
     base_settings = curriculum.get_settings()
 
-    env = PacManEnv(render_mode="rgb_array", **base_settings)
-    agent = DQNAgent(input_dim=36, output_dim=4)
+    env = DQNActionMaskingWrapper(PacManEnv(render_mode="rgb_array", **base_settings))
+    base_env = env.unwrapped
+    agent = DQNAgent(input_dim=21, output_dim=4)
     start_episode = 0
     if os.path.exists(CHECKPOINT_PATH):
         try:
@@ -219,9 +222,9 @@ def run_visual_dqn():
         current_settings['maze_seed'] = dynamic_seed
         current_settings['max_episode_steps'] = DQN_MAX_EPISODE_STEPS
 
-        env._base_cfg.update(current_settings)
-        env.max_episode_steps = DQN_MAX_EPISODE_STEPS
-        env.current_stage = curriculum.current_stage
+        base_env._base_cfg.update(current_settings)
+        base_env.max_episode_steps = DQN_MAX_EPISODE_STEPS
+        base_env.current_stage = curriculum.current_stage
 
         state, _ = env.reset(seed=dynamic_seed)
 
@@ -261,35 +264,60 @@ def run_visual_dqn():
                         speed_mode_index = 4
 
             valid_actions = env.get_valid_actions()
-            action = agent.select_action(state, valid_actions=valid_actions)
+            policy_action, exploring = agent.select_action(
+                state,
+                valid_actions=valid_actions,
+                return_exploration=True,
+            )
+            action = env.pick_action(policy_action, exploring=exploring)
             next_state, reward, terminated, truncated, info = env.step(action)
             done = terminated or truncated
             episode_steps += 1
             internal_ticks_step = int(info.get("internal_ticks", 0)) if isinstance(info, dict) else 0
             episode_micro_ticks += max(0, internal_ticks_step)
+            step_ticks = max(1, internal_ticks_step)
+
+            next_valid_actions = env.get_valid_actions()
+            next_valid_mask = np.zeros(agent.action_dim, dtype=np.float32)
+            for a in next_valid_actions:
+                if 0 <= int(a) < agent.action_dim:
+                    next_valid_mask[int(a)] = 1.0
+            discount_pow = float(agent.gamma ** step_ticks)
 
             if isinstance(info, dict):
                 last_info = info
                 if "death_cause" in info:
                     last_death_cause = info["death_cause"]
 
-            agent.memory.push(state, action, reward, next_state, done)
+            scaled_reward = float(reward) / DQN_REWARD_SCALE
+
+            agent.memory.push(
+                state,
+                action,
+                scaled_reward,
+                next_state,
+                done,
+                next_valid_mask=next_valid_mask,
+                discount_pow=discount_pow,
+            )
             total_reward += reward
 
             loss = agent.optimize_model()
             if loss is not None:
                 loss_history.append(loss)
+                # Keep target network close to policy network during long episodes.
+                agent.update_target_network()
 
             # High-Performance Rendering + debug overlays
             rgb_array = env.render()
             if rgb_array is not None:
                 # Draw overlays in native game coordinates first, then scale once.
                 native_surf = pygame.surfarray.make_surface(np.transpose(rgb_array, (1, 0, 2)))
-                _draw_visited_heatmap(native_surf, env)
-                _draw_raycast_overlay(native_surf, env)
+                _draw_visited_heatmap(native_surf, base_env)
+                _draw_raycast_overlay(native_surf, base_env)
                 target_dir = info.get("target_dir") if isinstance(info, dict) else None
                 blocked = bool(info.get("blocked_action", False)) if isinstance(info, dict) else False
-                _draw_action_arrow(native_surf, env, target_dir, blocked)
+                _draw_action_arrow(native_surf, base_env, target_dir, blocked)
 
                 surf = pygame.transform.scale(native_surf, (MAX_WINDOW_W, MAX_WINDOW_H))
                 window.blit(surf, (0, 0))
@@ -304,28 +332,35 @@ def run_visual_dqn():
 
             action_names = ACTION_NAMES
 
-            # Decode 36D state: 8 rays*4 + 2 BFS global distances + 2 power-state.
+            # Decode 21D state: 4 rays*4 + 3 BFS features + 2 power-state.
             rays = np.array(state, dtype=float).reshape(-1)
             ray_features = []
             nearest_food = 0.0
             nearest_danger = 0.0
+            nearest_edible = 0.0
             is_powered = 0.0
             power_remaining = 0.0
-            if rays.shape[0] >= 36:
+            if rays.shape[0] >= 21:
+                ray_features = [
+                    tuple(rays[i*4:(i+1)*4])
+                    for i in range(4)
+                ]
+                nearest_food = float(rays[16])
+                nearest_danger = float(rays[17])
+                nearest_edible = float(rays[18])
+                is_powered = float(rays[19])
+                power_remaining = float(rays[20])
+            elif rays.shape[0] >= 37:
+                # Backward compatibility when visualizing old checkpoints.
                 ray_features = [
                     tuple(rays[i*4:(i+1)*4])
                     for i in range(8)
                 ]
                 nearest_food = float(rays[32])
                 nearest_danger = float(rays[33])
-                is_powered = float(rays[34])
-                power_remaining = float(rays[35])
-            elif rays.shape[0] == 33:
-                # Backward compatibility with old models/checkpoints.
-                ray_features = [
-                    tuple(rays[i*4:(i+1)*4])
-                    for i in range(8)
-                ]
+                nearest_edible = float(rays[34])
+                is_powered = float(rays[35])
+                power_remaining = float(rays[36])
 
             y_off = 20
             window.blit(header_font.render("=== DQN LOGIC (EGOCENTRIC) ===", True, (255, 215, 0)), (MAX_WINDOW_W + 15, y_off))
@@ -366,6 +401,8 @@ def run_visual_dqn():
                 y_off += 18
                 window.blit(dash_font.render(f"Near Danger(BFS): {nearest_danger:+.3f}", True, (255, 120, 120)), (MAX_WINDOW_W + 15, y_off))
                 y_off += 16
+                window.blit(dash_font.render(f"Near Edible(BFS): {nearest_edible:+.3f}", True, (120, 220, 255)), (MAX_WINDOW_W + 15, y_off))
+                y_off += 16
                 window.blit(dash_font.render(f"Powered: {is_powered:+.1f}", True, (255, 220, 140)), (MAX_WINDOW_W + 15, y_off))
                 y_off += 16
                 window.blit(dash_font.render(f"Power Remain: {power_remaining:+.3f}", True, (255, 220, 140)), (MAX_WINDOW_W + 15, y_off))
@@ -379,15 +416,18 @@ def run_visual_dqn():
                     ("Pellet", reward_breakdown.get("pellet_reward", 0.0)),
                     ("Power", reward_breakdown.get("power_reward", 0.0)),
                     ("Ghost", reward_breakdown.get("ghost_reward", 0.0)),
+                    ("Win", reward_breakdown.get("win_reward", 0.0)),
                     ("Death", reward_breakdown.get("death_penalty", 0.0)),
                     ("Starve", reward_breakdown.get("starvation_penalty", 0.0)),
+                    ("Shape", reward_breakdown.get("food_shaping_reward", 0.0)),
+                    ("Invalid", reward_breakdown.get("invalid_action_penalty", 0.0)),
                     ("Total", reward_breakdown.get("total", 0.0)),
                 ]
                 for label, value in reward_lines:
                     window.blit(dash_font.render(f"{label:<7}: {value:+07.3f}", True, (190, 220, 255)), (MAX_WINDOW_W + 15, y_off))
                     y_off += 16
 
-            eng = env.engine
+            eng = base_env.engine
             window.blit(header_font.render("--- Ghost States ---", True, (255, 215, 0)), (MAX_WINDOW_W + 15, y_off))
             y_off += 20
             for g in eng.ghosts:
@@ -451,7 +491,7 @@ def run_visual_dqn():
             state = next_state
 
         # -------- POST EPISODE --------
-        won = env.engine.won
+        won = base_env.engine.won
         curriculum.update_performance(won)
 
         # Check Promotion and Demotion
@@ -463,7 +503,7 @@ def run_visual_dqn():
 
         # Exploration Jolt on Curriculum Change
         if promoted or demoted:
-            agent.epsilon = max(agent.epsilon, 0.2)
+            agent.apply_exploration_jolt(min_epsilon=0.2, duration_steps=50_000)
 
         avg_loss = sum(loss_history) / len(loss_history) if loss_history else 0.0
 
@@ -486,7 +526,6 @@ def run_visual_dqn():
                 ghosts, explore_rate, float(avg_loss)
             ])
 
-        agent.update_target_network()
 
         if episode % SAVE_EVERY_EPISODES == 0:
             save_checkpoint(

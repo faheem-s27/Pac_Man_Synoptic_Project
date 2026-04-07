@@ -29,17 +29,18 @@ print("=" * 60)
 def print_obs(obs):
     """Pretty-print the observation vector.
 
-    Layout (36 values, all in [-1, 1]):
+    Layout (37 values):
       [0..31] 8 egocentric rays x 4 channels: [wall, food, power, ghost_signal]
-      [32]    nearest food BFS (normalised)
-      [33]    nearest dangerous ghost BFS (normalised)
-      [34]    is_powered
-      [35]    power_time_remaining
+      [32]    nearest food BFS signal [0..1]
+      [33]    nearest dangerous ghost BFS signal [0..1]
+      [34]    nearest edible ghost BFS signal [0..1]
+      [35]    is_powered
+      [36]    power_time_remaining
     """
     obs = np.asarray(obs, dtype=np.float32).reshape(-1)
     print("\n── Observation ──────────────────────────────────────────")
-    if obs.shape[0] < 36:
-        print(f"  Unexpected observation size: {obs.shape[0]} (expected 36)")
+    if obs.shape[0] < 37:
+        print(f"  Unexpected observation size: {obs.shape[0]} (expected 37)")
         print("─────────────────────────────────────────────────────────")
         return
 
@@ -53,8 +54,9 @@ def print_obs(obs):
 
     print(f"  Near food BFS        : {obs[32]:+.3f}")
     print(f"  Near danger BFS      : {obs[33]:+.3f}")
-    print(f"  Powered              : {obs[34]:+.3f}")
-    print(f"  Power time remaining : {obs[35]:+.3f}")
+    print(f"  Near edible BFS      : {obs[34]:+.3f}")
+    print(f"  Powered              : {obs[35]:+.3f}")
+    print(f"  Power time remaining : {obs[36]:+.3f}")
     print("─────────────────────────────────────────────────────────")
 
 step = 0

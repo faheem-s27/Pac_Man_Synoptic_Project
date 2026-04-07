@@ -30,7 +30,7 @@ import neat
 import pygame
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
-_ROOT = os.path.dirname(_HERE)
+_ROOT = os.path.dirname(os.path.dirname(_HERE))
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
@@ -42,7 +42,7 @@ MAZE_ALGORITHM  = "recursive_backtracking"
 CONFIG_PATH     = os.path.join(_HERE, "neat_config.cfg")
 CHECKPOINT_DIR  = os.path.join(_HERE, "checkpoints")
 NUM_GENERATIONS = 200
-MAX_STEPS       = 3_500  # Aggressively restricted to punish infinite loops
+NEAT_MAX_EPISODE_STEPS = None
 
 MAX_WINDOW_W = 1400
 MAX_WINDOW_H = 900
@@ -55,19 +55,16 @@ ACTION_NAMES = ["FORWARD", "LEFT", "RIGHT", "BACKWARD"]
 
 
 def _settings_for_generation(curriculum: CurriculumManager, generation: int) -> dict:
-    if generation < 50:
-        curriculum.current_stage = 0
-    elif generation < 100:
-        curriculum.current_stage = 1
-    elif generation < 180:
-        curriculum.current_stage = 2
-    elif generation < 260:
-        curriculum.current_stage = 3
-    elif generation < 360:
-        curriculum.current_stage = 4
+    stage_count = max(1, len(curriculum.stage_profiles))
+    if NUM_GENERATIONS <= 1:
+        stage_idx = 0
     else:
-        curriculum.current_stage = 5
-    return curriculum.get_settings()
+        progress = max(0.0, min(1.0, float(generation) / float(NUM_GENERATIONS - 1)))
+        stage_idx = min(stage_count - 1, int(progress * stage_count))
+    curriculum.current_stage = stage_idx
+    settings = curriculum.get_settings()
+    settings["max_episode_steps"] = NEAT_MAX_EPISODE_STEPS
+    return settings
 
 
 def compute_grid_layout(n: int, game_w: int, game_h: int):
@@ -95,7 +92,6 @@ def compute_grid_layout(n: int, game_w: int, game_h: int):
 
 def _make_env(settings: dict, maze_seed: int | None = None) -> PacManEnv:
     cfg = dict(settings)
-    cfg["maze_algorithm"] = MAZE_ALGORITHM
     cfg["enable_sound"] = False
     if maze_seed is not None:
         cfg["maze_seed"] = maze_seed
@@ -122,7 +118,7 @@ class GenomeRunner:
         self.done = False
         self.total_reward = 0.0
         self.steps = 0
-        self.max_steps = env_settings.get('max_episode_steps', MAX_STEPS)
+        self.max_steps = env_settings.get('max_episode_steps', NEAT_MAX_EPISODE_STEPS)
 
         GenomeRunner._game_w = self.engine.screen_width
         GenomeRunner._game_h = self.engine.screen_height
@@ -139,7 +135,8 @@ class GenomeRunner:
         self.steps += 1
 
         self.total_reward += reward
-        if terminated or truncated or self.steps >= self.max_steps:
+        reached_step_limit = (self.max_steps is not None) and (self.steps >= self.max_steps)
+        if terminated or truncated or reached_step_limit:
             self.genome.fitness = self.total_reward
             self.done = True
 
@@ -203,7 +200,7 @@ def run(checkpoint=None):
         CONFIG_PATH,
     )
 
-    probe_settings = _settings_for_generation(curriculum=CurriculumManager(os.path.join(_ROOT, "game_settings.json")), generation=0)
+    probe_settings = _settings_for_generation(curriculum=CurriculumManager(), generation=0)
     probe_env = PacManEnv(render_mode=None, obs_type="vector", settings=probe_settings)
     probe_obs, _ = probe_env.reset(seed=123)
     obs_dim = len(probe_obs)
@@ -233,7 +230,7 @@ def run(checkpoint=None):
     population.add_reporter(BestGenomeSaver(CHECKPOINT_DIR))
 
     pygame.init()
-    curriculum = CurriculumManager(os.path.join(_ROOT, "game_settings.json"))
+    curriculum = CurriculumManager()
 
     label_font = pygame.font.Font(None, 18)
     info_font  = pygame.font.Font(None, 26)

@@ -4,20 +4,20 @@ PacManEnv.py
 Egocentric Raycast Version.
 
 Observation (float32):
-    - 8 global raycasts: for each direction, 4 floats:
+    - 4 global cardinal raycasts: for each direction, 4 floats:
         [ray_wall, ray_food, ray_power_pellet, ghost_signal]
       where ghost_signal is signed in [-1,1]:
       > 0 lethal ghost, < 0 frightened ghost, 0 = none.
       Directions (global frame):
-        0: UP, 1: DOWN, 2: LEFT, 3: RIGHT,
-        4: UP-LEFT, 5: UP-RIGHT, 6: DOWN-LEFT, 7: DOWN-RIGHT.
+        0: UP, 1: DOWN, 2: LEFT, 3: RIGHT.
     - Rays are re-ordered into Pac-Man's egocentric frame based on current heading.
-    - 2 BFS nearest-entity scalars (global awareness):
-        [d_nearest_food, d_nearest_ghost_dangerous]
-      represented as 1 / (1 + shortest_path_distance) (0 if unreachable / none).
+    - 3 BFS nearest-entity features (global awareness):
+        [d_nearest_food, d_nearest_ghost_dangerous, d_nearest_ghost_edible]
+      Distances are 1 / (1 + clipped_shortest_path_distance), with clipping controlled
+      by obs_distance_horizon (default 20).
     - 2 power-state scalars:
         [is_powered, power_time_remaining_normalized].
-Total observation size: 36 floats (8 * 4 + 2 + 2).
+Total observation size: 21 floats (4 * 4 + 3 + 2).
 
 Action Space: Discrete(4) — egocentric relative actions
     0: FORWARD, 1: LEFT, 2: RIGHT, 3: BACKWARD
@@ -69,16 +69,12 @@ class PacManEnv(gym.Env):
     _CARDINAL_TO_VEC = {UP: (0, -1), DOWN: (0, 1), LEFT_C: (-1, 0), RIGHT_C: (1, 0)}
     _CARDINAL_OPPOSITE = {UP: DOWN, DOWN: UP, LEFT_C: RIGHT_C, RIGHT_C: LEFT_C}
 
-    # 8 global ray directions (dx, dy) in tile coordinates
+    # 4 global cardinal ray directions (dx, dy) in tile coordinates
     _GLOBAL_RAY_DIRS = [
         (0, -1),   # UP
         (0, 1),    # DOWN
         (-1, 0),   # LEFT
         (1, 0),    # RIGHT
-        (-1, -1),  # UP-LEFT
-        (1, -1),   # UP-RIGHT
-        (-1, 1),   # DOWN-LEFT
-        (1, 1),    # DOWN-RIGHT
     ]
 
     def __init__(self, render_mode: str | None = None, obs_type: str = "vector", settings: dict | None = None, settings_path: str | None = None, max_episode_steps: int | None = 10000, maze_seed: int | None = None, **engine_kwargs):
@@ -101,6 +97,10 @@ class PacManEnv(gym.Env):
         # Exact centre-lock mode: keep this popped so it never leaks into GameEngine kwargs.
         self._base_cfg.pop("tile_center_tolerance", None)
 
+        # Clip very far distances so distant entities don't add excess noise.
+        raw_obs_horizon = self._base_cfg.pop("obs_distance_horizon", 20)
+        self.obs_distance_horizon = max(1, int(raw_obs_horizon))
+
         self.starvation_limit = 30 * 60
         self._ticks_since_food = 0
 
@@ -111,8 +111,8 @@ class PacManEnv(gym.Env):
 
         self.action_space = spaces.Discrete(4)
 
-        # Observation: all 36 features are bounded to [-1, 1].
-        self.observation_space = spaces.Box(low=-1.0, high=1.0, shape=(36,), dtype=np.float32)
+        # Observation channels are mostly [0,1], ghost ray remains signed [-1,1].
+        self.observation_space = spaces.Box(low=-1.0, high=1.0, shape=(21,), dtype=np.float32)
 
         self._last_action = None
         self._last_cardinal_dir = self.UP
@@ -233,10 +233,8 @@ class PacManEnv(gym.Env):
         }
 
         actions = [a for a, target in action_to_dir.items() if target in valid_dirs]
-        # In straight corridors (only forward/backward valid), force forward-only.
-        opposite = self._CARDINAL_OPPOSITE[heading]
-        if len(valid_dirs) == 2 and heading in valid_dirs and opposite in valid_dirs:
-            return [self.FORWARD]
+        # Keep all physically valid actions, including BACKWARD in corridors,
+        # so the policy can learn tactical reversals when needed.
         return actions if actions else [self.FORWARD, self.LEFT, self.RIGHT, self.BACKWARD]
 
 
@@ -267,6 +265,11 @@ class PacManEnv(gym.Env):
                 queue.append((nx, ny))
 
         return distances
+
+    def _distance_to_signal(self, distance: int) -> float:
+        """Convert path/raycast distance to a bounded signal with clipping."""
+        d = min(int(distance), self.obs_distance_horizon)
+        return 1.0 / (1.0 + float(d))
 
     def _get_vector_obs(self) -> np.ndarray:
         eng = self.engine
@@ -310,29 +313,29 @@ class PacManEnv(gym.Env):
                 d += 1
 
                 if not (0 <= cx < eng.maze.width and 0 <= cy < eng.maze.height) or eng.maze.maze[cy][cx] == 1:
-                    w_d = 1.0 / (1.0 + d)
+                    w_d = self._distance_to_signal(d)
                     break
 
                 if f_d == 0.0 and (cx, cy) in food_tiles:
-                    f_d = 1.0 / (1.0 + d)
+                    f_d = self._distance_to_signal(d)
 
                 if p_d == 0.0 and (cx, cy) in power_tiles:
-                    p_d = 1.0 / (1.0 + d)
+                    p_d = self._distance_to_signal(d)
 
                 if g_d == 0.0:
                     if (cx, cy) in lethal_ghost_tiles:
-                        g_d = 1.0 / (1.0 + d)
+                        g_d = self._distance_to_signal(d)
                     elif (cx, cy) in edible_ghost_tiles:
-                        g_d = -1.0 / (1.0 + d)
+                        g_d = -self._distance_to_signal(d)
 
             global_rays.extend([w_d, f_d, p_d, g_d])
 
         heading = self._get_pacman_heading_cardinal()
         heading_mapping = {
-            self.UP:      [0, 1, 2, 3, 4, 5, 6, 7],
-            self.DOWN:    [1, 0, 3, 2, 7, 6, 5, 4],
-            self.LEFT_C:  [2, 3, 1, 0, 6, 4, 7, 5],
-            self.RIGHT_C: [3, 2, 0, 1, 5, 7, 4, 6],
+            self.UP:      [0, 1, 2, 3],
+            self.DOWN:    [1, 0, 3, 2],
+            self.LEFT_C:  [2, 3, 1, 0],
+            self.RIGHT_C: [3, 2, 0, 1],
         }
         order = heading_mapping.get(heading, heading_mapping[self.UP])
 
@@ -360,10 +363,15 @@ class PacManEnv(gym.Env):
                     best = d
             if best == float("inf"):
                 return 0.0
-            return 1.0 / (1.0 + float(best))
+            return self._distance_to_signal(int(best))
 
-        obs.append(inv_nearest(food_tiles))
-        obs.append(inv_nearest(lethal_ghost_tiles))
+        near_food = inv_nearest(food_tiles)
+        near_danger = inv_nearest(lethal_ghost_tiles)
+        near_edible = inv_nearest(edible_ghost_tiles)
+
+        obs.append(near_food)
+        obs.append(near_danger)
+        obs.append(near_edible)
 
         is_powered = 1.0 if eng.frightened_mode else 0.0
         power_remaining = 0.0
@@ -376,22 +384,7 @@ class PacManEnv(gym.Env):
 
         obs = np.array(obs, dtype=np.float32)
 
-        # Normalize non-ghost channels from [0,1] to [-1,1].
-        for i in range(8):
-            base = i * 4
-            obs[base + 0] = 2.0 * obs[base + 0] - 1.0  # wall
-            obs[base + 1] = 2.0 * obs[base + 1] - 1.0  # food
-            obs[base + 2] = 2.0 * obs[base + 2] - 1.0  # power
-            # obs[base + 3] ghost_signal stays signed
-
-        # BFS nearest distances.
-        obs[32] = 2.0 * obs[32] - 1.0
-        obs[33] = 2.0 * obs[33] - 1.0
-
-        # Power-state context.
-        obs[34] = 2.0 * obs[34] - 1.0
-        obs[35] = 2.0 * obs[35] - 1.0
-
+        # Keep distances/context in [0,1]; only ghost ray channel is signed.
         return obs
 
     def step(self, action: int):
@@ -404,8 +397,7 @@ class PacManEnv(gym.Env):
         heading = self._get_pacman_heading_cardinal()
 
         valid_actions = self.get_valid_actions()
-        if action not in valid_actions:
-            action = int(np.random.choice(valid_actions))
+        blocked_action = action not in valid_actions
 
         left_map = {
             self.UP: self.LEFT_C,
@@ -436,6 +428,75 @@ class PacManEnv(gym.Env):
         else:
             target_dir = backward_map[heading]
 
+        # Do not rewrite invalid actions into random valid ones.
+        # This keeps learning targets honest: illegal choices are punished directly.
+        if blocked_action:
+            self._last_action = int(action)
+            self._step_count += 1
+            self._ticks_since_food += 1
+
+            accumulated_reward = -5.0
+            reward_breakdown = {
+                "pellet_reward": 0.0,
+                "power_reward": 0.0,
+                "ghost_reward": 0.0,
+                "win_reward": 0.0,
+                "death_penalty": 0.0,
+                "starvation_penalty": 0.0,
+                "food_shaping_reward": 0.0,
+                "invalid_action_penalty": -5.0,
+                "living_penalty": 0.0,
+                "total": 0.0,
+            }
+
+            starved = self._ticks_since_food >= self.starvation_limit
+            if starved:
+                accumulated_reward -= 100.0
+                reward_breakdown["starvation_penalty"] -= 100.0
+
+            accumulated_reward -= 0.5
+            reward_breakdown["living_penalty"] -= 0.5
+
+            terminated = bool(starved)
+            truncated = (self.max_episode_steps is not None) and (self._step_count >= self.max_episode_steps)
+
+            px = eng.pacman.x + eng.pacman.size // 2
+            py = eng.pacman.y + eng.pacman.size // 2
+            cur_tx = int(px // ts)
+            cur_ty = int(py // ts)
+            tile_key = (cur_tx, cur_ty)
+            visit_count = self._visit_counts.get(tile_key, 0) + 1
+            self._visit_counts[tile_key] = visit_count
+            if tile_key not in self._visited_tiles:
+                self._visited_tiles.add(tile_key)
+
+            reward_breakdown["total"] = float(accumulated_reward)
+
+            if starved:
+                death_cause = "STARVATION"
+            elif truncated:
+                death_cause = "MAX_STEPS"
+            else:
+                death_cause = "NONE"
+
+            info = self._get_info()
+            info.update({
+                "death_cause": death_cause,
+                "internal_ticks": 0,
+                "tile_center": (cur_tx, cur_ty),
+                "center_lock_mode": "exact",
+                "steps": int(self._step_count),
+                "action": int(action),
+                "target_dir": int(target_dir),
+                "visit_count": int(visit_count),
+                "blocked_action": True,
+                "reward_breakdown": reward_breakdown,
+            })
+
+            if self.render_mode == "human":
+                self._render_human()
+            return self._get_obs(), accumulated_reward, terminated, truncated, info
+
         self._last_action = int(action)
         self._last_cardinal_dir = target_dir
         eng.pacman.next_direction = self._CARDINAL_TO_VEC[target_dir]
@@ -449,8 +510,14 @@ class PacManEnv(gym.Env):
             "win_reward": 0.0,
             "death_penalty": 0.0,
             "starvation_penalty": 0.0,
+            "food_shaping_reward": 0.0,
+            "living_penalty": 0.0,
             "total": 0.0,
         }
+
+        # 21D observation layout: near_food is index 16.
+        initial_obs = self._get_obs()
+        dist_food_before = float(initial_obs[16]) if initial_obs.shape[0] >= 21 else 0.0
 
         # Pre-loop topo-lock tracking
         px_start = eng.pacman.x + eng.pacman.size // 2
@@ -491,12 +558,12 @@ class PacManEnv(gym.Env):
             self._step_count += 1
             self._ticks_since_food += 1
 
-            reward_tick = -0.01
+            reward_tick = 0.0
 
             # Pellets
             pellets_eaten = max(0, pre_pellets - len(eng.pellets))
             if pellets_eaten > 0:
-                pellet_gain = 1.0 * pellets_eaten
+                pellet_gain = 10.0 * pellets_eaten
                 reward_tick += pellet_gain
                 reward_breakdown["pellet_reward"] += pellet_gain
                 self._ticks_since_food = 0
@@ -506,7 +573,7 @@ class PacManEnv(gym.Env):
             # Power pellets
             power_eaten = max(0, pre_power - len(eng.power_pellets))
             if power_eaten > 0:
-                power_gain = 3.0 * power_eaten
+                power_gain = 50.0 * power_eaten
                 reward_tick += power_gain
                 reward_breakdown["power_reward"] += power_gain
                 self._ticks_since_food = 0
@@ -516,25 +583,25 @@ class PacManEnv(gym.Env):
             # Ghosts
             ghosts_eaten = max(0, sum(1 for g in eng.ghosts if g.state == GhostState.EATEN) - pre_eaten)
             if ghosts_eaten > 0:
-                ghost_gain = 5.0 * ghosts_eaten
+                ghost_gain = 200.0 * ghosts_eaten
                 reward_tick += ghost_gain
                 reward_breakdown["ghost_reward"] += ghost_gain
                 self.ghosts_eaten_this_episode += ghosts_eaten
 
             # Terminal events
             if eng.won and not pre_won:
-                reward_tick += 50.0
-                reward_breakdown["win_reward"] += 50.0
+                reward_tick += 1000.0
+                reward_breakdown["win_reward"] += 1000.0
 
             if eng.lives < pre_lives:
-                reward_tick -= 20.0
-                reward_breakdown["death_penalty"] -= 20.0
+                reward_tick -= 500.0
+                reward_breakdown["death_penalty"] -= 500.0
 
             # Starvation
             starved = self._ticks_since_food >= self.starvation_limit
             if starved:
-                reward_tick -= 25.0
-                reward_breakdown["starvation_penalty"] -= 25.0
+                reward_tick -= 100.0
+                reward_breakdown["starvation_penalty"] -= 100.0
 
             accumulated_reward += reward_tick
 
@@ -601,6 +668,15 @@ class PacManEnv(gym.Env):
         if tile_key not in self._visited_tiles:
             self._visited_tiles.add(tile_key)
 
+        new_obs = self._get_obs()
+        dist_food_after = float(new_obs[16]) if new_obs.shape[0] >= 21 else 0.0
+        shaping_reward = (dist_food_after - dist_food_before) * 5.0
+        accumulated_reward += shaping_reward
+        reward_breakdown["food_shaping_reward"] += shaping_reward
+
+        accumulated_reward -= 0.5
+        reward_breakdown["living_penalty"] -= 0.5
+
         reward_breakdown["total"] = float(accumulated_reward)
 
         # 4. Post-Loop Cleanup
@@ -627,6 +703,7 @@ class PacManEnv(gym.Env):
             "action": int(action),
             "target_dir": int(target_dir),
             "visit_count": int(visit_count),
+            "blocked_action": False,
             "reward_breakdown": reward_breakdown,
         })
 
