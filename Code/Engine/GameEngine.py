@@ -2,10 +2,10 @@ import os
 import random
 from enum import Enum
 import pygame
-from Code.Maze import Maze
-from Code.PacMan import PacMan
-from Code.Pathfinding import Pathfinding
-from Code.Ghost import Ghost, Pinky, Clyde, Inky, GhostState
+from Code.Maze.Maze import Maze
+from Code.Engine.PacMan import PacMan
+from Code.Engine.Pathfinding import Pathfinding
+from Code.Engine.Ghost import Ghost, Pinky, Clyde, Inky, GhostState
 
 def parse_resolution(resolution_str):
     """Parse resolution string like '800x800' to (width, height)."""
@@ -239,7 +239,8 @@ class GameEngine:
 
     def _load_fruit_images(self):
         """Load level fruit sprites from Images/food, scaled to tile size."""
-        images_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "Images", "food"))
+        # Assets live at project root: <repo>/Images/food
+        images_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "Images", "food"))
         sprite_files = {
             "cherry": "cherries.png",
             "strawberry": "strawberry.png",

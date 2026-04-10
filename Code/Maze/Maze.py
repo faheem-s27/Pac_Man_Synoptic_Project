@@ -1,6 +1,6 @@
 import pygame
 import math
-import Code.MazeGenerator as MazeGenerator
+import Code.Maze.MazeGenerator as MazeGenerator
 
 class Maze:
     DOOR_TILE = 2  # Ghost door — passable by ghosts, wall for Pac-Man

@@ -29,18 +29,19 @@ import numpy as np
 import neat
 import pygame
 
-_HERE = os.path.dirname(os.path.abspath(__file__))
-_ROOT = os.path.dirname(os.path.dirname(_HERE))
+_HERE      = os.path.dirname(os.path.abspath(__file__))
+_NEAT_ROOT = os.path.dirname(_HERE)                          # Code/Models/NEAT/
+_ROOT      = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(_HERE))))  # project root
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-from Code.PacManEnv import PacManEnv
-from Code.CurriculumManager import CurriculumManager
+from Code.Environment.PacManEnv import PacManEnv
+from Code.Environment.CurriculumManager import CurriculumManager
 
 # ─── Tunables ────────────────────────────────────────────────────────────────
 MAZE_ALGORITHM  = "recursive_backtracking"
-CONFIG_PATH     = os.path.join(_HERE, "neat_config.cfg")
-CHECKPOINT_DIR  = os.path.join(_HERE, "checkpoints")
+CONFIG_PATH     = os.path.join(_NEAT_ROOT, "neat_config.cfg")
+CHECKPOINT_DIR  = os.path.join(_NEAT_ROOT, "Checkpoints")
 NUM_GENERATIONS = 200
 NEAT_MAX_EPISODE_STEPS = None
 

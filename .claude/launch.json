@@ -1,0 +1,68 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "Pac-Man Game (Main Menu)",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["Code/main.py"],
+      "port": null,
+      "description": "Main game entry point with UI menu — play manually or launch training from here"
+    },
+    {
+      "name": "DQN Training (Headless)",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["Code/Models/DQN/dqn_train_headless.py"],
+      "port": null,
+      "description": "Train the DQN agent without any GUI — fastest training mode"
+    },
+    {
+      "name": "DQN Training (Visual)",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["Code/Models/DQN/dqn_train_visual.py"],
+      "port": null,
+      "description": "Train the DQN agent with live Pygame rendering"
+    },
+    {
+      "name": "DQN Evaluation",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["Code/Models/DQN/eval_dqn.py"],
+      "port": null,
+      "description": "Evaluate a trained DQN checkpoint"
+    },
+    {
+      "name": "NEAT Training (Standard)",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["Code/Models/neat_train_standard.py"],
+      "port": null,
+      "description": "Standard NEAT evolutionary training"
+    },
+    {
+      "name": "NEAT Training (Visual)",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["Code/Models/neat_train_visual.py"],
+      "port": null,
+      "description": "NEAT training with live Pygame visualisation"
+    },
+    {
+      "name": "NEAT Training (Curriculum)",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["Code/Models/neat_train_cirrcilum.py"],
+      "port": null,
+      "description": "NEAT curriculum learning training"
+    },
+    {
+      "name": "NEAT Replay",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["Code/Models/neat_replay.py"],
+      "port": null,
+      "description": "Replay a saved NEAT agent"
+    },
+    {
+      "name": "Maze Viewer",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["Code/maze_viewer.py"],
+      "port": null,
+      "description": "Standalone maze visualisation utility"
+    }
+  ]
+}

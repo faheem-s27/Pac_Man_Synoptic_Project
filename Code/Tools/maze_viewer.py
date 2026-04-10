@@ -6,18 +6,20 @@ import random
 import json
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
-if _HERE not in sys.path:
-    sys.path.insert(0, _HERE)
+_CODE = os.path.dirname(_HERE)                    # Code/
+_ROOT = os.path.dirname(_CODE)                    # project root
+if _ROOT not in sys.path:
+    sys.path.insert(0, _ROOT)
 
-from Code.Maze import Maze
-from Code.Pathfinding import Pathfinding, validate_maze_connectivity
+from Code.Maze.Maze import Maze
+from Code.Engine.Pathfinding import Pathfinding, validate_maze_connectivity
 
 # Ghost colors
 BLINKY_RED = (255, 0, 0)
 PINKY_PINK = (255, 184, 255)
 INKY_CYAN = (0, 255, 255)
 CLYDE_ORANGE = (255, 184, 82)
-SETTINGS_PATH = os.path.join(_HERE, "game_settings.json")
+SETTINGS_PATH = os.path.join(_CODE, "game_settings.json")
 
 
 def _parse_resolution(resolution_str):

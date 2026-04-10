@@ -1,6 +1,6 @@
 """
-neat_train_cirrcilum.py
-=============
+neat_train_curriculum.py
+========================
 Trains a NEAT agent to play Pac-Man using the PacManEnv Gymnasium wrapper.
 
 Usage
@@ -26,13 +26,14 @@ import matplotlib.pyplot as plt
 import graphviz
 
 # ── Path setup ───────────────────────────────────────────────────────────────
-_HERE = os.path.dirname(os.path.abspath(__file__))
-_ROOT = os.path.dirname(os.path.dirname(_HERE))
+_HERE      = os.path.dirname(os.path.abspath(__file__))
+_NEAT_ROOT = os.path.dirname(_HERE)                          # Code/Models/NEAT/
+_ROOT      = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(_HERE))))  # project root
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-from Code.PacManEnv import PacManEnv
-from Code.CurriculumManager import CurriculumManager
+from Code.Environment.PacManEnv import PacManEnv
+from Code.Environment.CurriculumManager import CurriculumManager
 
 # ── Global State for Curriculum ──────────────────────────────────────────────
 # This global is updated by the main loop before each generation,
@@ -46,10 +47,10 @@ CURRICULUM = CurriculumManager()
 # We define a static evaluation suite to ensure fair comparison across generations
 NEAT_MAX_EPISODE_STEPS = None
 NUM_GENERATIONS  = 500
-CHECKPOINT_DIR   = os.path.join(_HERE, "checkpoints")
-CONFIG_PATH      = os.path.join(_HERE, "neat_config.cfg") # Matched your previous filename
+CHECKPOINT_DIR   = os.path.join(_NEAT_ROOT, "Checkpoints")
+CONFIG_PATH      = os.path.join(_NEAT_ROOT, "neat_config.cfg")
 PARALLEL         = True
-LOG_DIR          = os.path.join(_HERE, "csv_history")
+LOG_DIR          = os.path.join(_NEAT_ROOT, "CSV_History")
 RUN_TIMESTAMP    = datetime.now().strftime("%d-%m_%H-%M-%S")
 LOG_PATH         = os.path.join(LOG_DIR, f"neat_curriculum_log_{RUN_TIMESTAMP}.csv")
 

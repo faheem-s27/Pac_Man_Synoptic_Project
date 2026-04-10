@@ -1,5 +1,5 @@
 import random
-from Code.Pathfinding import validate_maze_connectivity
+from Code.Engine.Pathfinding import validate_maze_connectivity
 
 
 def generate_maze(width=20, height=21,
@@ -583,6 +583,181 @@ def refine_recursive_backtracking_layout(
             break
 
 
+def _collect_wall_component(maze, sx, sy, width, height, half_limit, visited):
+    stack = [(sx, sy)]
+    component = set()
+    visited.add((sx, sy))
+
+    while stack:
+        x, y = stack.pop()
+        component.add((x, y))
+        for dx, dy in [(0, 1), (0, -1), (1, 0), (-1, 0)]:
+            nx, ny = x + dx, y + dy
+            if not (1 <= nx <= half_limit and 1 <= ny < height - 1):
+                continue
+            if (nx, ny) in visited:
+                continue
+            if maze[ny][nx] != 1:
+                continue
+            visited.add((nx, ny))
+            stack.append((nx, ny))
+
+    return component
+
+
+def _find_bridgeable_wall_segment_on_row(maze, component, y, min_len=4):
+    row_x = sorted(x for (x, ry) in component if ry == y)
+    if not row_x:
+        return None
+
+    segments = []
+    start = row_x[0]
+    prev = row_x[0]
+    for x in row_x[1:]:
+        if x == prev + 1:
+            prev = x
+            continue
+        segments.append((start, prev))
+        start = x
+        prev = x
+    segments.append((start, prev))
+
+    candidates = []
+    for sx, ex in segments:
+        if (ex - sx + 1) < min_len:
+            continue
+        if not _is_open_tile(maze[y][sx - 1]):
+            continue
+        if not _is_open_tile(maze[y][ex + 1]):
+            continue
+        candidates.append((sx, ex))
+
+    if not candidates:
+        return None
+    return max(candidates, key=lambda p: p[1] - p[0])
+
+
+def _find_bridgeable_wall_segment_on_col(maze, component, x, min_len=4):
+    col_y = sorted(y for (cx, y) in component if cx == x)
+    if not col_y:
+        return None
+
+    segments = []
+    start = col_y[0]
+    prev = col_y[0]
+    for y in col_y[1:]:
+        if y == prev + 1:
+            prev = y
+            continue
+        segments.append((start, prev))
+        start = y
+        prev = y
+    segments.append((start, prev))
+
+    candidates = []
+    for sy, ey in segments:
+        if (ey - sy + 1) < min_len:
+            continue
+        if not _is_open_tile(maze[sy - 1][x]):
+            continue
+        if not _is_open_tile(maze[ey + 1][x]):
+            continue
+        candidates.append((sy, ey))
+
+    if not candidates:
+        return None
+    return max(candidates, key=lambda p: p[1] - p[0])
+
+
+def slice_large_wall_blocks(
+    maze,
+    width,
+    height,
+    cage_zone=None,
+    protected=None,
+    min_span=5,
+    min_area=24,
+    min_cut_len=4,
+):
+    """
+    Slice oversized interior wall masses by carving bridge corridors through them.
+    Runs on left half before mirroring so symmetry is preserved automatically.
+    """
+    if cage_zone is None:
+        cage_zone = set()
+    if protected is None:
+        protected = set()
+
+    half_limit = width // 2
+    visited = set()
+
+    for y in range(1, height - 1):
+        for x in range(1, half_limit + 1):
+            if (x, y) in visited:
+                continue
+            if maze[y][x] != 1:
+                continue
+
+            component = _collect_wall_component(maze, x, y, width, height, half_limit, visited)
+            if not component:
+                continue
+
+            if any((cx, cy) in cage_zone or (cx, cy) in protected for (cx, cy) in component):
+                continue
+
+            xs = [cx for cx, _ in component]
+            ys = [cy for _, cy in component]
+            min_x, max_x = min(xs), max(xs)
+            min_y, max_y = min(ys), max(ys)
+            span_x = max_x - min_x + 1
+            span_y = max_y - min_y + 1
+
+            # Ignore border-touching and already-narrow wall structures.
+            if min_x <= 1 or max_x >= half_limit or min_y <= 1 or max_y >= height - 2:
+                continue
+            if span_x < min_span and span_y < min_span:
+                continue
+            if len(component) < min_area:
+                continue
+
+            center_x = (min_x + max_x) // 2
+            center_y = (min_y + max_y) // 2
+
+            did_cut = False
+
+            row_candidates = sorted(
+                range(min_y + 1, max_y),
+                key=lambda ry: abs(ry - center_y)
+            )
+            for ry in row_candidates:
+                seg = _find_bridgeable_wall_segment_on_row(maze, component, ry, min_len=min_cut_len)
+                if seg is None:
+                    continue
+                sx, ex = seg
+                for cx in range(sx, ex + 1):
+                    maze[ry][cx] = 0
+                did_cut = True
+                break
+
+            col_candidates = sorted(
+                range(min_x + 1, max_x),
+                key=lambda cx: abs(cx - center_x)
+            )
+            for cx in col_candidates:
+                seg = _find_bridgeable_wall_segment_on_col(maze, component, cx, min_len=min_cut_len)
+                if seg is None:
+                    continue
+                sy, ey = seg
+                for cy in range(sy, ey + 1):
+                    maze[cy][cx] = 0
+                did_cut = True
+                break
+
+            if did_cut:
+                # Refresh nearby topology so later passes see a clean corridor graph.
+                eliminate_dead_ends(maze, width, height, max_iterations=2, cage_zone=cage_zone)
+
+
 def _protected_corridor_tiles(width, height):
     """
     Tiles that should not be sealed by the 2x2 cleanup.
@@ -629,6 +804,18 @@ def _build_maze(width, height, algorithm, rng=None):
             max_probe=10,
             min_dead_end_corridor_len=3
         )
+
+    # Slice oversized wall masses into additional corridors before symmetry copy.
+    slice_large_wall_blocks(
+        maze,
+        width,
+        height,
+        cage_zone=cage_zone,
+        protected=_protected_corridor_tiles(width, height),
+        min_span=5,
+        min_area=24,
+        min_cut_len=4,
+    )
 
     # Final shape enforcement on the left half
     enforce_no_2x2_open_areas(

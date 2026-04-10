@@ -1,7 +1,7 @@
 import sys
 import pygame
-from Code.GameEngine import GameState, GameEngine
-from Code.Button import Button
+from Code.Engine.GameEngine import GameState, GameEngine
+from Code.UI.Button import Button
 from Code.Settings import Settings
 
 FPS = 60

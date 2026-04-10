@@ -1,10 +1,11 @@
 import sys
 import os
 _HERE = os.path.dirname(os.path.abspath(__file__))
-if _HERE not in sys.path:
-    sys.path.insert(0, _HERE)
+_ROOT = os.path.dirname(os.path.dirname(_HERE))  # project root (up from Tools/ then Code/)
+if _ROOT not in sys.path:
+    sys.path.insert(0, _ROOT)
 
-from MazeGenerator import generate_maze
+from Code.Maze.MazeGenerator import generate_maze
 
 SEED = 2127825239
 

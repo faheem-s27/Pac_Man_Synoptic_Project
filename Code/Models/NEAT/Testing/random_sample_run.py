@@ -1,11 +1,12 @@
 import time
 import os
 import numpy as np
-from Code.PacManEnv import PacManEnv
+from Code.Environment.PacManEnv import PacManEnv
 from Code.Settings  import Settings
 
 _HERE     = os.path.dirname(os.path.abspath(__file__))
-_CODE_DIR = os.path.join(_HERE, "..")   # Models/ is inside Code/
+# Navigate up: Testing/ -> NEAT/ -> Models/ -> Code/
+_CODE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(_HERE)))
 _settings = Settings(os.path.join(_CODE_DIR, "game_settings.json")).get_all()
 MAZE_SEED = _settings.get("maze_seed", None)
 

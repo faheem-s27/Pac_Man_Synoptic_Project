@@ -3,11 +3,12 @@ import sys
 import random
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
-if _HERE not in sys.path:
-    sys.path.insert(0, _HERE)
+_ROOT = os.path.dirname(os.path.dirname(_HERE))  # project root
+if _ROOT not in sys.path:
+    sys.path.insert(0, _ROOT)
 
-from Code.Maze import Maze
-from Code.Pathfinding import validate_maze_connectivity
+from Code.Maze.Maze import Maze
+from Code.Engine.Pathfinding import validate_maze_connectivity
 
 
 def stress_test(num_trials: int = 1000,

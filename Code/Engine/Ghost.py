@@ -2,7 +2,7 @@ import pygame
 from enum import Enum
 from PIL import Image
 import os
-from Code.Pathfinding import Pathfinding
+from Code.Engine.Pathfinding import Pathfinding
 
 
 class GhostState(Enum):
@@ -96,7 +96,8 @@ class Ghost:
         """Load directional GIFs plus frightened blue/white warning GIFs."""
         directions = ["up", "down", "left", "right"]
         ghost_name = self.name.lower()
-        images_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "Images"))
+        # Assets live at project root: <repo>/Images
+        images_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "Images"))
 
         # Always initialise the dict before populating it
         if self.ghost_images is None:

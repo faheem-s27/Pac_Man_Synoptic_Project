@@ -22,19 +22,19 @@ import random
 
 import neat
 
-_HERE = os.path.dirname(os.path.abspath(__file__))
-_ROOT = os.path.dirname(os.path.dirname(_HERE))
+_HERE      = os.path.dirname(os.path.abspath(__file__))
+_NEAT_ROOT = os.path.dirname(_HERE)                          # Code/Models/NEAT/
+_ROOT      = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(_HERE))))  # project root
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-from Code.PacManEnv import PacManEnv
+from Code.Environment.PacManEnv import PacManEnv
 from Code.Settings  import Settings
-from Code.CurriculumManager import CurriculumManager
+from Code.Environment.CurriculumManager import CurriculumManager
 
 # ── Config ───────────────────────────────────────────────────────────────────
-# _HERE is Code/Models/ — game_settings.json lives one level up in Code/
 _SETTINGS      = Settings(os.path.join(_ROOT, "Code", "game_settings.json")).get_all()
-CONFIG_PATH    = os.path.join(_HERE, "neat_config.cfg")
+CONFIG_PATH    = os.path.join(_NEAT_ROOT, "neat_config.cfg")
 ACTION_NAMES   = {0: "FORWARD", 1: "LEFT", 2: "RIGHT", 3: "BACKWARD"}
 NEAT_MAX_EPISODE_STEPS = None
 
@@ -149,7 +149,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--genome",
         type=str,
-        default=os.path.join(_HERE, "checkpoints", "best_genome.pkl"),
+        default=os.path.join(_NEAT_ROOT, "Checkpoints", "best_genome.pkl"),
         help="Path to the pickled genome file",
     )
     parser.add_argument(

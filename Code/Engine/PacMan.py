@@ -58,7 +58,8 @@ class PacMan:
 
     def _load_pacman_images(self):
         directions = ["up", "down", "left", "right"]
-        images_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "Images"))
+        # Assets live at project root: <repo>/Images
+        images_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "Images"))
 
         for direction in directions:
             try:

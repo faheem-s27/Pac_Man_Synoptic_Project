@@ -5,17 +5,20 @@ import pygame
 import numpy as np
 
 # Path resolution for imports
-_HERE = os.path.dirname(os.path.abspath(__file__))
-_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(_HERE)))
+_HERE     = os.path.dirname(os.path.abspath(__file__))
+_DQN_ROOT = os.path.dirname(_HERE)                          # Code/Models/DQN/
+_ROOT     = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(_HERE))))  # project root
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
+if _DQN_ROOT not in sys.path:
+    sys.path.insert(0, _DQN_ROOT)   # dqn_agent
 
-from Code.PacManEnv import PacManEnv
-from dqn_agent import QNetwork
+from Code.Environment.PacManEnv import PacManEnv
+from dqn_agent import DuelingQNetwork
 
 
 def evaluate_model(model_path, episodes=3):
-    """Visual evaluation for the 21-dim egocentric DQN (4 actions)."""
+    """Visual evaluation for the 27-dim egocentric DQN (4 actions)."""
     pygame.init()
     fps_clock = pygame.time.Clock()
     TARGET_FPS = 10
@@ -25,13 +28,13 @@ def evaluate_model(model_path, episodes=3):
     win_w = env.engine.screen_width
     win_h = env.engine.screen_height + 60
     screen = pygame.display.set_mode((win_w, win_h))
-    pygame.display.set_caption("DQN Evaluation — Egocentric 21D")
+    pygame.display.set_caption("DQN Evaluation — Egocentric 27D")
 
     info_font = pygame.font.Font(None, 28)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    # 21-dim in, 4 egocentric actions out
-    policy_net = QNetwork(input_dim=21, output_dim=4).to(device)
+    # 31-dim in (4 dirs × 6 ray channels + 3 BFS + 2 power + 2 progress), 4 egocentric actions out
+    policy_net = DuelingQNetwork(input_dim=31, output_dim=4).to(device)
     policy_net.load_state_dict(torch.load(model_path, map_location=device, weights_only=True))
     policy_net.eval()
 
@@ -80,7 +83,7 @@ def evaluate_model(model_path, episodes=3):
 
 
 if __name__ == "__main__":
-    model_file = os.path.join(_HERE, "dqn_pacman.pth")
+    model_file = os.path.join(_DQN_ROOT, "Checkpoints", "dqn_pacman.pth")
     if os.path.exists(model_file):
         evaluate_model(model_file)
     else:

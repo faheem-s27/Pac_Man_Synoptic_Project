@@ -3,13 +3,19 @@ import sys
 import torch
 import numpy as np
 
-_HERE = os.path.dirname(os.path.abspath(__file__))
-_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(_HERE)))
+_HERE      = os.path.dirname(os.path.abspath(__file__))
+_DQN_ROOT  = os.path.dirname(_HERE)                          # Code/Models/DQN/
+_TESTING   = os.path.join(_DQN_ROOT, "Testing")
+_ROOT      = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(_HERE))))  # project root
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
+if _DQN_ROOT not in sys.path:
+    sys.path.insert(0, _DQN_ROOT)   # dqn_agent, checkpoint_utils, action_masking_wrapper
+if _TESTING not in sys.path:
+    sys.path.insert(0, _TESTING)    # eval_dqn
 
-from Code.PacManEnv import PacManEnv
-from Code.CurriculumManager import CurriculumManager
+from Code.Environment.PacManEnv import PacManEnv
+from Code.Environment.CurriculumManager import CurriculumManager
 from dqn_agent import DQNAgent
 from eval_dqn import evaluate_model
 from checkpoint_utils import save_checkpoint, load_checkpoint
@@ -19,8 +25,8 @@ from action_masking_wrapper import DQNActionMaskingWrapper
 TARGET_UPDATE_FREQUENCY = 1000
 BATCH_SIZE = 128
 SAVE_EVERY_EPISODES = 50
-SAVE_PATH = os.path.join(_HERE, "dqn_pacman.pth")
-CHECKPOINT_PATH = os.path.join(_HERE, "dqn_checkpoint.pt")
+SAVE_PATH = os.path.join(_DQN_ROOT, "Checkpoints", "dqn_pacman.pth")
+CHECKPOINT_PATH = os.path.join(_DQN_ROOT, "Checkpoints", "dqn_checkpoint.pt")
 INCLUDE_CURRICULUM_STATE = True
 # For DQN runs we prefer starvation/game-over as terminal causes over max-step truncation.
 DQN_MAX_EPISODE_STEPS = None
@@ -34,8 +40,10 @@ def train():
     else:
         print(f"[DQN][Headless] max_episode_steps={DQN_MAX_EPISODE_STEPS} -> max-step truncation enabled.")
 
-    # Egocentric 21-dim observation, 4 relative actions (F,L,R,B)
-    agent = DQNAgent(input_dim=21, output_dim=4)
+    # Egocentric 31-dim observation, 4 relative actions (F,L,R,B).
+    # Obs layout: 4 dirs × 6 channels (wall,food,power,lethal_ghost,edible_ghost,visit_sat)
+    # + 3 BFS + 2 power state + 2 progress (pellets_remaining_ratio, explore_rate) = 31.
+    agent = DQNAgent(input_dim=31, output_dim=4)
     print(f"Agent initialized on: {agent.device}")
 
     total_steps = 0
@@ -47,17 +55,30 @@ def train():
             if load_meta.get("loaded"):
                 episode = int(load_meta.get("episode", 0))
                 total_steps = int(agent.step_count)
+                loaded_keys = int(load_meta.get("loaded_keys", 0))
+                total_keys = int(load_meta.get("total_keys", 0))
+                load_mode = str(load_meta.get("load_mode", "full"))
                 print(
                     f"Resumed checkpoint {CHECKPOINT_PATH} | "
-                    f"episode={episode} epsilon={agent.epsilon:.4f} step_count={agent.step_count}"
+                    f"episode={episode} epsilon={agent.epsilon:.4f} step_count={agent.step_count} "
+                    f"load={load_mode} ({loaded_keys}/{total_keys} tensors)"
                 )
+            else:
+                reason = load_meta.get("reason", "unknown")
+                print(f"Checkpoint skipped ({reason}); continuing fresh.")
         except Exception as e:
             print(f"Checkpoint load failed, continuing fresh. Error: {e}")
     elif os.path.exists(SAVE_PATH):
         try:
             load_meta = load_checkpoint(SAVE_PATH, agent, curriculum=None, map_location=agent.device)
             if load_meta.get("loaded"):
-                print(f"Loaded legacy weights from {SAVE_PATH}")
+                loaded_keys = int(load_meta.get("loaded_keys", 0))
+                total_keys = int(load_meta.get("total_keys", 0))
+                load_mode = str(load_meta.get("load_mode", "full"))
+                print(f"Loaded legacy weights from {SAVE_PATH} ({load_mode}, {loaded_keys}/{total_keys} tensors).")
+            else:
+                reason = load_meta.get("reason", "unknown")
+                print(f"Legacy weights skipped ({reason}); continuing fresh.")
         except Exception as e:
             print(f"Legacy weights load failed, continuing fresh. Error: {e}")
 

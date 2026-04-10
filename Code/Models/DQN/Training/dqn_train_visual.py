@@ -1,7 +1,7 @@
 """
 dqn_train_visual.py
 ===================
-Egocentric 21-input DQN visual trainer.
+Egocentric 27-input DQN visual trainer.
 """
 
 import sys
@@ -13,25 +13,28 @@ import csv
 import numpy as np
 from datetime import datetime
 
-_HERE = os.path.dirname(os.path.abspath(__file__))
-_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(_HERE)))
+_HERE      = os.path.dirname(os.path.abspath(__file__))
+_DQN_ROOT  = os.path.dirname(_HERE)                          # Code/Models/DQN/
+_ROOT      = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(_HERE))))  # project root
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
+if _DQN_ROOT not in sys.path:
+    sys.path.insert(0, _DQN_ROOT)   # dqn_agent, checkpoint_utils, action_masking_wrapper
 
-from Code.PacManEnv import PacManEnv
-from Code.CurriculumManager import CurriculumManager
-from dqn_agent import DQNAgent
-from checkpoint_utils import save_checkpoint, load_checkpoint
-from action_masking_wrapper import DQNActionMaskingWrapper
+from Code.Environment.PacManEnv import PacManEnv
+from Code.Environment.CurriculumManager import CurriculumManager
+from Code.Models.DQN.dqn_agent import DQNAgent
+from Code.Models.DQN.checkpoint_utils import save_checkpoint, load_checkpoint
+from Code.Models.DQN.action_masking_wrapper import DQNActionMaskingWrapper
 
 MAX_WINDOW_W = 800
 MAX_WINDOW_H = 800
 DASHBOARD_W  = 400
 INFO_BAR_H   = 60
 TARGET_FPS   = 120
-SAVE_PATH    = os.path.join(_HERE, "dqn_pacman.pth")
-CHECKPOINT_PATH = os.path.join(_HERE, "dqn_checkpoint.pt")
-LOG_DIR      = os.path.join(_HERE, "csv_history")
+SAVE_PATH    = os.path.join(_DQN_ROOT, "Checkpoints", "dqn_pacman.pth")
+CHECKPOINT_PATH = os.path.join(_DQN_ROOT, "Checkpoints", "dqn_checkpoint.pt")
+LOG_DIR      = os.path.join(_DQN_ROOT, "CSV_History")
 RUN_TIMESTAMP = datetime.now().strftime("%d-%m_%H-%M-%S")
 LOG_PATH     = os.path.join(LOG_DIR, f"training_log_{RUN_TIMESTAMP}.csv")
 SAVE_EVERY_EPISODES = 50
@@ -166,7 +169,7 @@ def run_visual_dqn():
     win_w = MAX_WINDOW_W + DASHBOARD_W
     win_h = MAX_WINDOW_H + INFO_BAR_H
     window = pygame.display.set_mode((win_w, win_h))
-    pygame.display.set_caption("DQN Pac-Man — Egocentric 21D")
+    pygame.display.set_caption("DQN Pac-Man — Egocentric 27D")
 
     info_font = pygame.font.Font(None, 28)
     dash_font = pygame.font.Font(None, 22)
@@ -179,24 +182,38 @@ def run_visual_dqn():
 
     env = DQNActionMaskingWrapper(PacManEnv(render_mode="rgb_array", **base_settings))
     base_env = env.unwrapped
-    agent = DQNAgent(input_dim=21, output_dim=4)
+    # 31-dim obs: 4 dirs × 6 ray channels + 3 BFS + 2 power + 2 progress
+    agent = DQNAgent(input_dim=31, output_dim=4)
     start_episode = 0
     if os.path.exists(CHECKPOINT_PATH):
         try:
             load_meta = load_checkpoint(CHECKPOINT_PATH, agent, curriculum=curriculum, map_location=agent.device)
             if load_meta.get("loaded"):
                 start_episode = int(load_meta.get("episode", 0))
+                loaded_keys = int(load_meta.get("loaded_keys", 0))
+                total_keys = int(load_meta.get("total_keys", 0))
+                load_mode = str(load_meta.get("load_mode", "full"))
                 print(
                     f"Resumed checkpoint {CHECKPOINT_PATH} | "
-                    f"episode={start_episode} epsilon={agent.epsilon:.4f} step_count={agent.step_count}"
+                    f"episode={start_episode} epsilon={agent.epsilon:.4f} step_count={agent.step_count} "
+                    f"load={load_mode} ({loaded_keys}/{total_keys} tensors)"
                 )
+            else:
+                reason = load_meta.get("reason", "unknown")
+                print(f"Checkpoint skipped ({reason}); starting fresh training state.")
         except Exception as e:
             print(f"Failed to load checkpoint. Starting fresh. Error: {e}")
     elif os.path.exists(SAVE_PATH):
         try:
             load_meta = load_checkpoint(SAVE_PATH, agent, curriculum=None, map_location=agent.device)
             if load_meta.get("loaded"):
-                print(f"Loaded legacy weights from {SAVE_PATH}")
+                loaded_keys = int(load_meta.get("loaded_keys", 0))
+                total_keys = int(load_meta.get("total_keys", 0))
+                load_mode = str(load_meta.get("load_mode", "full"))
+                print(f"Loaded legacy weights from {SAVE_PATH} ({load_mode}, {loaded_keys}/{total_keys} tensors).")
+            else:
+                reason = load_meta.get("reason", "unknown")
+                print(f"Legacy weights skipped ({reason}); starting with random initialization.")
         except Exception as e:
             print(f"Failed to load weights. Starting fresh. Error: {e}")
 
@@ -332,7 +349,12 @@ def run_visual_dqn():
 
             action_names = ACTION_NAMES
 
-            # Decode 21D state: 4 rays*4 + 3 BFS features + 2 power-state.
+            # Decode 31D state:
+            #   4 rays × 6 channels (wall,food,power,lethal_ghost,edible_ghost,visit_sat) = 24
+            #   + 3 BFS (near_food=24, near_danger=25, near_edible=26)
+            #   + 2 power (is_powered=27, power_remaining=28)
+            #   + 2 progress (pellets_remaining_ratio=29, explore_rate=30)
+            # All values in [-1, 1] via 2x-1 normalisation.
             rays = np.array(state, dtype=float).reshape(-1)
             ray_features = []
             nearest_food = 0.0
@@ -340,27 +362,32 @@ def run_visual_dqn():
             nearest_edible = 0.0
             is_powered = 0.0
             power_remaining = 0.0
-            if rays.shape[0] >= 21:
+            pellets_remaining_ratio = 0.0
+            explore_rate_obs = 0.0
+            if rays.shape[0] >= 31:
+                # Current 31D layout: 6 channels per ray direction
+                ray_features = [
+                    tuple(rays[i*6:(i+1)*6])
+                    for i in range(4)
+                ]
+                nearest_food            = float(rays[24])
+                nearest_danger          = float(rays[25])
+                nearest_edible          = float(rays[26])
+                is_powered              = float(rays[27])
+                power_remaining         = float(rays[28])
+                pellets_remaining_ratio = float(rays[29])
+                explore_rate_obs        = float(rays[30])
+            elif rays.shape[0] >= 21:
+                # Legacy obs fallback
                 ray_features = [
                     tuple(rays[i*4:(i+1)*4])
                     for i in range(4)
                 ]
-                nearest_food = float(rays[16])
-                nearest_danger = float(rays[17])
-                nearest_edible = float(rays[18])
-                is_powered = float(rays[19])
+                nearest_food    = float(rays[16])
+                nearest_danger  = float(rays[17])
+                nearest_edible  = float(rays[18])
+                is_powered      = float(rays[19])
                 power_remaining = float(rays[20])
-            elif rays.shape[0] >= 37:
-                # Backward compatibility when visualizing old checkpoints.
-                ray_features = [
-                    tuple(rays[i*4:(i+1)*4])
-                    for i in range(8)
-                ]
-                nearest_food = float(rays[32])
-                nearest_danger = float(rays[33])
-                nearest_edible = float(rays[34])
-                is_powered = float(rays[35])
-                power_remaining = float(rays[36])
 
             y_off = 20
             window.blit(header_font.render("=== DQN LOGIC (EGOCENTRIC) ===", True, (255, 215, 0)), (MAX_WINDOW_W + 15, y_off))
@@ -391,21 +418,29 @@ def run_visual_dqn():
 
             # Show raycast values beneath Q-values
             if ray_features:
-                window.blit(header_font.render("--- Egocentric Rays (w,f,p,g) ---", True, (255, 215, 0)), (MAX_WINDOW_W + 15, y_off))
+                n_ch = len(ray_features[0])
+                ray_header = "--- Egocentric Rays (w,f,p,lg,eg,vs) ---" if n_ch == 6 else "--- Egocentric Rays (w,f,p,g) ---"
+                window.blit(header_font.render(ray_header, True, (255, 215, 0)), (MAX_WINDOW_W + 15, y_off))
                 y_off += 20
-                for idx, (w_d, f_d, p_d, g_d) in enumerate(ray_features):
-                    label = f"Ray {idx}: W={w_d:+.3f} F={f_d:+.3f} P={p_d:+.3f} G={g_d:+.3f}"
+                dir_names = ["FWD", "LFT", "RGT", "BCK"]
+                for idx, channels in enumerate(ray_features):
+                    if n_ch == 6:
+                        w_d, f_d, p_d, lg_d, eg_d, vs = channels
+                        label = f"{dir_names[idx]}: W={w_d:.2f} F={f_d:.2f} P={p_d:.2f} LG={lg_d:.2f} EG={eg_d:.2f} VS={vs:.2f}"
+                    else:
+                        w_d, f_d, p_d, g_d = channels
+                        label = f"Ray {idx}: W={w_d:.2f} F={f_d:.2f} P={p_d:.2f} G={g_d:+.2f}"
                     window.blit(dash_font.render(label, True, (200, 200, 200)), (MAX_WINDOW_W + 15, y_off))
                     y_off += 16
-                window.blit(dash_font.render(f"Near Food(BFS): {nearest_food:+.3f}", True, (120, 240, 120)), (MAX_WINDOW_W + 15, y_off))
-                y_off += 18
+                window.blit(dash_font.render(f"Near Food(BFS):   {nearest_food:+.3f}", True, (120, 240, 120)), (MAX_WINDOW_W + 15, y_off))
+                y_off += 16
                 window.blit(dash_font.render(f"Near Danger(BFS): {nearest_danger:+.3f}", True, (255, 120, 120)), (MAX_WINDOW_W + 15, y_off))
                 y_off += 16
                 window.blit(dash_font.render(f"Near Edible(BFS): {nearest_edible:+.3f}", True, (120, 220, 255)), (MAX_WINDOW_W + 15, y_off))
                 y_off += 16
-                window.blit(dash_font.render(f"Powered: {is_powered:+.1f}", True, (255, 220, 140)), (MAX_WINDOW_W + 15, y_off))
+                window.blit(dash_font.render(f"Powered: {is_powered:+.1f}  Remain: {power_remaining:+.3f}", True, (255, 220, 140)), (MAX_WINDOW_W + 15, y_off))
                 y_off += 16
-                window.blit(dash_font.render(f"Power Remain: {power_remaining:+.3f}", True, (255, 220, 140)), (MAX_WINDOW_W + 15, y_off))
+                window.blit(dash_font.render(f"Pellets Left: {pellets_remaining_ratio:+.3f}  Explored: {explore_rate_obs:+.3f}", True, (200, 255, 180)), (MAX_WINDOW_W + 15, y_off))
                 y_off += 18
 
             reward_breakdown = info.get("reward_breakdown", {}) if isinstance(info, dict) else {}
