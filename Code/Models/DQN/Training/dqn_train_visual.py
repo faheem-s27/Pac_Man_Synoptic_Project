@@ -182,8 +182,8 @@ def run_visual_dqn():
 
     env = DQNActionMaskingWrapper(PacManEnv(render_mode="rgb_array", **base_settings))
     base_env = env.unwrapped
-    # 31-dim obs: 4 dirs × 6 ray channels + 3 BFS + 2 power + 2 progress
-    agent = DQNAgent(input_dim=31, output_dim=4)
+    # 29-dim obs: 4 dirs × 6 ray channels + 3 BFS + 2 power
+    agent = DQNAgent(input_dim=29, output_dim=4)
     start_episode = 0
     if os.path.exists(CHECKPOINT_PATH):
         try:
@@ -349,11 +349,10 @@ def run_visual_dqn():
 
             action_names = ACTION_NAMES
 
-            # Decode 31D state:
+            # Decode 29D state:
             #   4 rays × 6 channels (wall,food,power,lethal_ghost,edible_ghost,visit_sat) = 24
             #   + 3 BFS (near_food=24, near_danger=25, near_edible=26)
             #   + 2 power (is_powered=27, power_remaining=28)
-            #   + 2 progress (pellets_remaining_ratio=29, explore_rate=30)
             # All values in [-1, 1] via 2x-1 normalisation.
             rays = np.array(state, dtype=float).reshape(-1)
             ray_features = []
@@ -362,10 +361,8 @@ def run_visual_dqn():
             nearest_edible = 0.0
             is_powered = 0.0
             power_remaining = 0.0
-            pellets_remaining_ratio = 0.0
-            explore_rate_obs = 0.0
-            if rays.shape[0] >= 31:
-                # Current 31D layout: 6 channels per ray direction
+            if rays.shape[0] >= 29:
+                # Current 29D layout: 6 channels per ray direction
                 ray_features = [
                     tuple(rays[i*6:(i+1)*6])
                     for i in range(4)
@@ -375,8 +372,6 @@ def run_visual_dqn():
                 nearest_edible          = float(rays[26])
                 is_powered              = float(rays[27])
                 power_remaining         = float(rays[28])
-                pellets_remaining_ratio = float(rays[29])
-                explore_rate_obs        = float(rays[30])
             elif rays.shape[0] >= 21:
                 # Legacy obs fallback
                 ray_features = [
@@ -440,8 +435,7 @@ def run_visual_dqn():
                 y_off += 16
                 window.blit(dash_font.render(f"Powered: {is_powered:+.1f}  Remain: {power_remaining:+.3f}", True, (255, 220, 140)), (MAX_WINDOW_W + 15, y_off))
                 y_off += 16
-                window.blit(dash_font.render(f"Pellets Left: {pellets_remaining_ratio:+.3f}  Explored: {explore_rate_obs:+.3f}", True, (200, 255, 180)), (MAX_WINDOW_W + 15, y_off))
-                y_off += 18
+                y_off += 2
 
             reward_breakdown = info.get("reward_breakdown", {}) if isinstance(info, dict) else {}
             if reward_breakdown:

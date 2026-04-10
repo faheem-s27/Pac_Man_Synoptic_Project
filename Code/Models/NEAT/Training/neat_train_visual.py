@@ -15,8 +15,8 @@ Controls
 
 Usage
 -----
-    python -m Code.neat_train_visual
-    python -m Code.neat_train_visual --checkpoint checkpoints/neat-checkpoint-9
+    python Code/Models/NEAT/Training/neat_train_visual.py
+    python Code/Models/NEAT/Training/neat_train_visual.py --checkpoint Code/Models/NEAT/Checkpoints/neat-checkpoint-9
 """
 
 import os
@@ -53,6 +53,27 @@ TARGET_FPS   = 60
 
 # ACTION: Egocentric 4-action space (FORWARD/LEFT/RIGHT/BACKWARD)
 ACTION_NAMES = ["FORWARD", "LEFT", "RIGHT", "BACKWARD"]
+
+
+def _validate_env_schema(config: neat.Config, settings: dict) -> tuple[int, int]:
+    """Fail fast if neat_config dimensions drift from PacManEnv."""
+    # Use rgb_array so PacManEnv does not switch SDL to dummy mode.
+    probe_env = PacManEnv(render_mode="rgb_array", obs_type="vector", settings=settings)
+    probe_obs, _ = probe_env.reset(seed=123)
+    obs_dim = len(probe_obs)
+    action_dim = int(getattr(probe_env.action_space, "n", 4))
+    probe_env.close()
+
+    if config.genome_config.num_inputs != obs_dim:
+        raise ValueError(
+            f"NEAT config num_inputs={config.genome_config.num_inputs} does not match PacManEnv obs_dim={obs_dim}. "
+            f"Update Code/Models/NEAT/neat_config.cfg to keep training aligned."
+        )
+    if config.genome_config.num_outputs != action_dim:
+        raise ValueError(
+            f"NEAT config num_outputs={config.genome_config.num_outputs} does not match action_dim={action_dim}."
+        )
+    return obs_dim, action_dim
 
 
 def _settings_for_generation(curriculum: CurriculumManager, generation: int) -> dict:
@@ -202,19 +223,7 @@ def run(checkpoint=None):
     )
 
     probe_settings = _settings_for_generation(curriculum=CurriculumManager(), generation=0)
-    probe_env = PacManEnv(render_mode=None, obs_type="vector", settings=probe_settings)
-    probe_obs, _ = probe_env.reset(seed=123)
-    obs_dim = len(probe_obs)
-    action_dim = int(getattr(probe_env.action_space, "n", 4))
-    probe_env.close()
-    if config.genome_config.num_inputs != obs_dim:
-        raise ValueError(
-            f"NEAT config num_inputs={config.genome_config.num_inputs} does not match PacManEnv obs_dim={obs_dim}."
-        )
-    if config.genome_config.num_outputs != action_dim:
-        raise ValueError(
-            f"NEAT config num_outputs={config.genome_config.num_outputs} does not match action_dim={action_dim}."
-        )
+    _validate_env_schema(config, probe_settings)
 
     if checkpoint and os.path.exists(checkpoint):
         print(f"Resuming from: {checkpoint}")

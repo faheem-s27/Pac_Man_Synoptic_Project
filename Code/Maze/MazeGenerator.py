@@ -360,6 +360,101 @@ def eliminate_dead_ends(maze, width, height, max_iterations=100, cage_zone=None)
                     changed = True
 
 
+def remove_one_way_corridors(maze, width, height, cage_zone=None, protected=None, max_iterations=64):
+    """
+    Remove residual one-way/dead-end corridors by opening side walls.
+
+    A one-way corridor in this grid context manifests as a degree-1 open tile
+    (single exit). We iteratively open adjacent walls until no such tiles
+    remain outside protected regions.
+    """
+    if cage_zone is None:
+        cage_zone = set()
+    if protected is None:
+        protected = set()
+
+    def blocked(tx, ty):
+        return (tx, ty) in cage_zone or (tx, ty) in protected
+
+    for _ in range(max_iterations):
+        changed = False
+        dead_ends = []
+
+        for y in range(1, height - 1):
+            for x in range(1, width - 1):
+                if blocked(x, y):
+                    continue
+                if not _is_open_tile(maze[y][x]):
+                    continue
+                if _open_neighbor_count(maze, x, y, width, height) == 1:
+                    dead_ends.append((x, y))
+
+        if not dead_ends:
+            break
+
+        for x, y in dead_ends:
+            candidates = []
+            for dx, dy in [(0, 1), (0, -1), (1, 0), (-1, 0)]:
+                nx, ny = x + dx, y + dy
+                if not (1 <= nx < width - 1 and 1 <= ny < height - 1):
+                    continue
+                if blocked(nx, ny):
+                    continue
+                if maze[ny][nx] != 1:
+                    continue
+
+                # Prefer carving into walls that already touch open space.
+                n_open = _open_neighbor_count(maze, nx, ny, width, height)
+                candidates.append((n_open, nx, ny))
+
+            if not candidates:
+                continue
+
+            candidates.sort(reverse=True)
+            _, wx, wy = candidates[0]
+            maze[wy][wx] = 0
+            changed = True
+
+        if not changed:
+            break
+
+
+def _cleanup_corridor_topology(
+    maze,
+    width,
+    height,
+    cage_zone,
+    protected,
+    dead_end_iterations=16,
+    box_passes=16,
+    one_way_iterations=24,
+):
+    """Shared cleanup pipeline used at multiple build stages."""
+    enforce_no_2x2_open_areas(
+        maze, width, height,
+        cage_zone=cage_zone,
+        protected=protected,
+        max_passes=box_passes,
+    )
+    eliminate_dead_ends(
+        maze, width, height,
+        max_iterations=dead_end_iterations,
+        cage_zone=cage_zone,
+    )
+    remove_one_way_corridors(
+        maze, width, height,
+        cage_zone=cage_zone,
+        protected=protected,
+        max_iterations=one_way_iterations,
+    )
+    enforce_no_2x2_open_areas(
+        maze, width, height,
+        cage_zone=cage_zone,
+        protected=protected,
+        max_passes=box_passes,
+    )
+
+
 def enforce_no_2x2_open_areas(maze, width, height, cage_zone=None, protected=None, max_passes=12):
     """
     Ensure there are no 2x2 fully-open blocks anywhere outside protected tiles.
@@ -784,13 +879,18 @@ def _build_maze(width, height, algorithm, rng=None):
     _carve_left_half(maze, width, height, algorithm, rng)
 
     cage_zone = _get_cage_zone(width, height)
+    protected = _protected_corridor_tiles(width, height)
 
-    # 2. Execute ALL random refinements on the left half BEFORE mirroring
-    eliminate_dead_ends(maze, width, height, cage_zone=cage_zone)
-    enforce_no_2x2_open_areas(
-        maze, width, height,
+    # 2. Execute refinements on left half before mirroring.
+    _cleanup_corridor_topology(
+        maze,
+        width,
+        height,
         cage_zone=cage_zone,
-        protected=_protected_corridor_tiles(width, height)
+        protected=protected,
+        dead_end_iterations=20,
+        box_passes=16,
+        one_way_iterations=24,
     )
 
     if algorithm == "recursive_backtracking":
@@ -817,19 +917,16 @@ def _build_maze(width, height, algorithm, rng=None):
         min_cut_len=4,
     )
 
-    # Final shape enforcement on the left half
-    enforce_no_2x2_open_areas(
-        maze, width, height,
+    # Final topology cleanup on left half before symmetry copy.
+    _cleanup_corridor_topology(
+        maze,
+        width,
+        height,
         cage_zone=cage_zone,
-        protected=_protected_corridor_tiles(width, height),
-        max_passes=20
-    )
-    eliminate_dead_ends(maze, width, height, max_iterations=20, cage_zone=cage_zone)
-    enforce_no_2x2_open_areas(
-        maze, width, height,
-        cage_zone=cage_zone,
-        protected=_protected_corridor_tiles(width, height),
-        max_passes=20
+        protected=protected,
+        dead_end_iterations=24,
+        box_passes=20,
+        one_way_iterations=28,
     )
 
     # 3. MIRROR THE MAZE
@@ -844,19 +941,15 @@ def _build_maze(width, height, algorithm, rng=None):
 
     # 5. Final global cleanup after bridge carving.
     # Bridges can reintroduce 2x2 open pockets near centre; clean them on full maze.
-    protected = _protected_corridor_tiles(width, height)
-    enforce_no_2x2_open_areas(
-        maze, width, height,
+    _cleanup_corridor_topology(
+        maze,
+        width,
+        height,
         cage_zone=cage_zone,
         protected=protected,
-        max_passes=24
-    )
-    eliminate_dead_ends(maze, width, height, max_iterations=8, cage_zone=cage_zone)
-    enforce_no_2x2_open_areas(
-        maze, width, height,
-        cage_zone=cage_zone,
-        protected=protected,
-        max_passes=24
+        dead_end_iterations=12,
+        box_passes=24,
+        one_way_iterations=20,
     )
 
     # 6. Re-enforce symmetry after full-maze cleanup.
@@ -864,6 +957,20 @@ def _build_maze(width, height, algorithm, rng=None):
     mirror_maze(maze, width, height)
 
     # 7. Re-stamp cage last so cleanup/mirroring cannot damage it, and clear door path.
+    _, ct, _, _, door_x, _ = create_ghost_cage(maze, width, height)
+    if ct - 1 > 0:
+        maze[ct - 1][door_x] = 0
+
+    # 8. Final sweep specifically targeting any residual one-way corridors.
+    remove_one_way_corridors(
+        maze,
+        width,
+        height,
+        cage_zone=cage_zone,
+        protected=protected,
+        max_iterations=40,
+    )
+    mirror_maze(maze, width, height)
     _, ct, _, _, door_x, _ = create_ghost_cage(maze, width, height)
     if ct - 1 > 0:
         maze[ct - 1][door_x] = 0

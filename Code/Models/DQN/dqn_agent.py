@@ -26,7 +26,7 @@ import numpy as np
 import random
 
 # Default observation size matching PacManEnv.OBS_SIZE
-OBS_DIM = 31
+OBS_DIM = 29
 
 
 # =============================================================================

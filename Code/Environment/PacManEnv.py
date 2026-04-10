@@ -44,17 +44,7 @@ Observation layout (float32, all values normalised to [-1, 1]):
   [28] power_time_remaining: normalised remaining frightened duration
 
 ─────────────────────────────────────────────────────────────────
-  Block D — Progress features (2 scalars, indices 29-30)
-  ──────────────────────────────────────────────────────────────
-  [29] pellets_remaining_ratio : fraction of pellets still uncollected.
-       Directly encodes task progress; low value signals near-win state.
-  [30] explore_rate            : fraction of walkable maze tiles visited so
-       far this episode. Together with visit_saturation, gives the agent a
-       global sense of map coverage. Replaces the naive per-tile bonus reward
-       (which was unactionable because the agent had no perceptual support to
-       distinguish new tiles from old ones).
-
-Total: 24 + 3 + 2 + 2 = 31 floats.
+Total: 24 + 3 + 2 = 29 floats.
 
 ─────────────────────────────────────────────────────────────────
 Normalisation: ALL channels remapped from [0,1] to [-1,1] via 2x-1.
@@ -94,9 +84,30 @@ from Code.Engine.Ghost import GhostState
 def _load_settings(json_path: str | dict | None = None) -> dict:
     if isinstance(json_path, dict):
         return json_path
-    if json_path is None:
-        json_path = os.path.join(_HERE, "game_settings.json")
-    return Settings(json_path).get_all()
+    # Resolve settings path defensively so scripts launched from different
+    # working directories still load the intended Code/game_settings.json.
+    if json_path is not None:
+        candidates = [json_path]
+        if not os.path.isabs(json_path):
+            candidates.extend([
+                os.path.join(_HERE, json_path),
+                os.path.join(_ROOT, json_path),
+                os.path.join(os.getcwd(), json_path),
+            ])
+    else:
+        candidates = [
+            os.path.join(_HERE, "game_settings.json"),
+            os.path.join(_ROOT, "game_settings.json"),
+            os.path.join(os.getcwd(), "game_settings.json"),
+        ]
+
+    for candidate in candidates:
+        if candidate and os.path.exists(candidate):
+            return Settings(candidate).get_all()
+
+    # Fall back to the Code-level default path for a clear failure message.
+    fallback = os.path.join(_ROOT, "game_settings.json")
+    return Settings(fallback).get_all()
 
 
 class PacManEnv(gym.Env):
@@ -116,11 +127,7 @@ class PacManEnv(gym.Env):
     IS_POWERED_IDX   = _RAY_BLOCK_END + 3   # 27
     POWER_REM_IDX    = _RAY_BLOCK_END + 4   # 28
 
-    # Progress features (indices 29-30)
-    PELLETS_RATIO_IDX = _RAY_BLOCK_END + 5  # 29
-    EXPLORE_RATE_IDX  = _RAY_BLOCK_END + 6  # 30
-
-    OBS_SIZE = 31
+    OBS_SIZE = 29
 
     # Alias for food-shaping reward computation
     FOOD_DIST_OBS_IDX = NEAR_FOOD_IDX       # 24
@@ -177,7 +184,9 @@ class PacManEnv(gym.Env):
         raw_obs_horizon = self._base_cfg.pop("obs_distance_horizon", 20)
         self.obs_distance_horizon = max(1, int(raw_obs_horizon))
 
-        self.starvation_limit  = 30 * 60
+        raw_starvation = self._base_cfg.get("starvation_limit_ticks", 30 * 60)
+        self._starvation_limit_default = max(1, int(raw_starvation))
+        self.starvation_limit = self._starvation_limit_default
         self._ticks_since_food = 0
 
         self._pygame_initialised = False
@@ -187,7 +196,7 @@ class PacManEnv(gym.Env):
 
         self.action_space = spaces.Discrete(4)
 
-        # All 31 channels are in [-1, 1] after normalisation.
+        # All 29 channels are in [-1, 1] after normalisation.
         self.observation_space = spaces.Box(
             low=-1.0, high=1.0, shape=(self.OBS_SIZE,), dtype=np.float32
         )
@@ -219,6 +228,9 @@ class PacManEnv(gym.Env):
         if seed is not None:
             cfg["maze_seed"] = seed
             np.random.seed(seed)
+
+        raw_starvation = cfg.get("starvation_limit_ticks", self._starvation_limit_default)
+        self.starvation_limit = max(1, int(raw_starvation))
 
         self._max_lives = max(1, int(cfg.get("lives", 3)))
 
@@ -495,27 +507,6 @@ class PacManEnv(gym.Env):
         obs.append(self._to_norm(is_powered))       # idx 27
         obs.append(self._to_norm(power_remaining))  # idx 28
 
-        # ── Block D: Progress features ────────────────────────────────────────
-        # pellets_remaining_ratio: fraction of total pellets still uncollected.
-        total_start = max(
-            1,
-            len(eng.pellets) + len(eng.power_pellets)
-            + self.pellets_eaten_this_episode
-            + self.power_pellets_eaten_this_episode,
-        )
-        pellets_remaining_ratio = (len(eng.pellets) + len(eng.power_pellets)) / total_start
-
-        # explore_rate: fraction of walkable tiles visited this episode.
-        # Paired with visit_saturation, this gives both local (per-direction)
-        # and global map-coverage context.
-        explore_rate = (
-            len(self._visited_tiles) / self._total_explorable_tiles
-            if self._total_explorable_tiles > 0 else 0.0
-        )
-
-        obs.append(self._to_norm(float(pellets_remaining_ratio)))  # idx 29
-        obs.append(self._to_norm(float(explore_rate)))             # idx 30
-
         return np.array(obs, dtype=np.float32)
 
     # =========================================================================
@@ -636,6 +627,7 @@ class PacManEnv(gym.Env):
         internal_ticks         = 0
         no_progress_ticks      = 0
         max_no_progress_ticks  = max(2, ts // max(1, eng.pacman.speed))
+        pellet_eaten_in_step   = False
         starved    = False
         terminated = False
         truncated  = False
@@ -663,6 +655,7 @@ class PacManEnv(gym.Env):
             # static within an episode; only pellet contents change, not tiles.
             pellets_eaten = max(0, pre_pellets - len(eng.pellets))
             if pellets_eaten > 0:
+                pellet_eaten_in_step = True
                 pellet_gain = 10.0 * pellets_eaten
                 reward_tick += pellet_gain
                 reward_breakdown["pellet_reward"] += pellet_gain
@@ -759,14 +752,13 @@ class PacManEnv(gym.Env):
         self._visited_tiles.add(tile_key)
 
         # Food-approach shaping: rewards movement toward nearest pellet.
-        # The exploration incentive is now embedded in the observation
-        # (visit_saturation + explore_rate) rather than in the reward signal,
-        # giving the agent perceptual grounds to act on it.
-        new_obs          = self._get_obs()
-        dist_food_after  = float(new_obs[self.FOOD_DIST_OBS_IDX])
-        shaping_reward   = (dist_food_after - dist_food_before) * 5.0
-        accumulated_reward += shaping_reward
-        reward_breakdown["food_shaping_reward"] += shaping_reward
+        # Exploration context is provided locally via visit_saturation per ray.
+        if not pellet_eaten_in_step:
+            new_obs          = self._get_obs()
+            dist_food_after  = float(new_obs[self.FOOD_DIST_OBS_IDX])
+            shaping_reward   = (dist_food_after - dist_food_before) * 5.0
+            accumulated_reward += shaping_reward
+            reward_breakdown["food_shaping_reward"] += shaping_reward
 
         accumulated_reward              -= 0.5
         reward_breakdown["living_penalty"] -= 0.5
@@ -864,9 +856,17 @@ class PacManEnv(gym.Env):
         self._clock.tick(self.metadata["render_fps"])
 
     def close(self):
-        if self._pygame_initialised:
+        if not self._pygame_initialised:
+            return
+
+        # Important for multi-env visual runs: headless/rgb_array envs should not
+        # shut down pygame globally, otherwise the training display surface is lost.
+        if self.render_mode == "human":
             pygame.quit()
-            self._pygame_initialised = False
+
+        self._screen = None
+        self._clock = None
+        self._pygame_initialised = False
 
     @staticmethod
     def _parse_res(res_str):

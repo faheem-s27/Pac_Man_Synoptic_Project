@@ -40,10 +40,9 @@ def train():
     else:
         print(f"[DQN][Headless] max_episode_steps={DQN_MAX_EPISODE_STEPS} -> max-step truncation enabled.")
 
-    # Egocentric 31-dim observation, 4 relative actions (F,L,R,B).
-    # Obs layout: 4 dirs × 6 channels (wall,food,power,lethal_ghost,edible_ghost,visit_sat)
-    # + 3 BFS + 2 power state + 2 progress (pellets_remaining_ratio, explore_rate) = 31.
-    agent = DQNAgent(input_dim=31, output_dim=4)
+    # Egocentric 29-dim observation, 4 relative actions (F,L,R,B).
+    # Obs layout: 4 dirs × 6 channels + 3 BFS + 2 power state = 29.
+    agent = DQNAgent(input_dim=29, output_dim=4)
     print(f"Agent initialized on: {agent.device}")
 
     total_steps = 0

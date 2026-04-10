@@ -33,8 +33,8 @@ def evaluate_model(model_path, episodes=3):
     info_font = pygame.font.Font(None, 28)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    # 31-dim in (4 dirs × 6 ray channels + 3 BFS + 2 power + 2 progress), 4 egocentric actions out
-    policy_net = DuelingQNetwork(input_dim=31, output_dim=4).to(device)
+    # 29-dim in (4 dirs × 6 ray channels + 3 BFS + 2 power), 4 egocentric actions out
+    policy_net = DuelingQNetwork(input_dim=29, output_dim=4).to(device)
     policy_net.load_state_dict(torch.load(model_path, map_location=device, weights_only=True))
     policy_net.eval()
 
