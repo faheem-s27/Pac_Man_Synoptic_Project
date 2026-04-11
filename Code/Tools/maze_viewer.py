@@ -21,6 +21,10 @@ INKY_CYAN = (0, 255, 255)
 CLYDE_ORANGE = (255, 184, 82)
 SETTINGS_PATH = os.path.join(_CODE, "game_settings.json")
 
+# Manual override for viewer-only resolution (takes precedence over game_settings.json).
+# Set to a string like "1000x1000" to force that resolution, or keep None to use settings/CLI.
+WINDOW_RESOLUTION_OVERRIDE = "800x800"
+
 
 def _parse_resolution(resolution_str):
     """Match GameEngine.parse_resolution behavior."""
@@ -66,6 +70,10 @@ def _load_viewer_defaults():
                 defaults["maze_seed"] = int(seed_val)
     except Exception:
         pass
+
+    if isinstance(WINDOW_RESOLUTION_OVERRIDE, str) and WINDOW_RESOLUTION_OVERRIDE:
+        defaults["window_resolution"] = WINDOW_RESOLUTION_OVERRIDE
+
     return defaults
 
 
@@ -326,6 +334,9 @@ def run_viewer(seed=None, algorithm="recursive_backtracking", tile_size=40,
         # Text Overlay
         text = f"Seed: {current_seed} | Status: {seed_status} | CLICK TO RANDOMIZE"
         screen.blit(font.render(text, True, (255, 255, 255)), (5, 5))
+
+        res_text = f"Viewer Resolution: {window_resolution} | Maze Tiles: {maze.width}x{maze.height}"
+        screen.blit(font.render(res_text, True, (200, 200, 200)), (5, 24))
 
         helper_bg_h = 24
         pygame.draw.rect(screen, (0, 0, 0), pygame.Rect(0, height_px - helper_bg_h, width_px, helper_bg_h))

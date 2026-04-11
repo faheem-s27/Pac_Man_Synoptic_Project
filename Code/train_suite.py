@@ -47,15 +47,14 @@ TEST_SEEDS = list(range(10000, 10100))
 # -----------------------------------------------------------------------------
 # Suite constants
 # -----------------------------------------------------------------------------
-MAX_EPISODES = 50_000
-EARLY_STOP_STAGE = 5
+MAX_EPISODES = 100_000
+EARLY_STOP_STAGE = 11
 EARLY_STOP_WINDOW = 20
 EARLY_STOP_WIN_RATE = 0.85
 
 DQN_REWARD_SCALE = 100.0
-DQN_EPSILON_DECAY_SUITE = 6_000_000
-DQN_EPSILON_DECAY_MIN_WIN_RATE = 0.20
-DQN_TRAIN_RENDER_MODE = "human"
+DQN_EPSILON_DECAY_SUITE = 5_000_000
+DQN_TRAIN_RENDER_MODE = None
 
 DQN_CHECKPOINT_DIR = os.path.join(_HERE, "Models", "DQN", "Checkpoints")
 NEAT_CHECKPOINT_DIR = os.path.join(_HERE, "Models", "NEAT", "Checkpoints")
@@ -319,11 +318,6 @@ def run_dqn_pipeline(log_path: str, resume: bool = False, resume_path: str | Non
     for episode in range(start_episode + 1, MAX_EPISODES + 1):
         final_episode = episode
 
-        pre_window_win_rate = (sum(recent_wins) / len(recent_wins)) if recent_wins else 0.0
-        freeze_decay_this_episode = pre_window_win_rate < DQN_EPSILON_DECAY_MIN_WIN_RATE
-        step_count_before_episode = int(agent.step_count)
-        epsilon_before_episode = float(agent.epsilon)
-
         settings = curriculum.get_settings()
         seed = int(rng.choice(TRAIN_SEEDS))
         settings["maze_seed"] = seed
@@ -337,10 +331,6 @@ def run_dqn_pipeline(log_path: str, resume: bool = False, resume_path: str | Non
             render_mode=DQN_TRAIN_RENDER_MODE,
         )
 
-        if freeze_decay_this_episode:
-            # Performance-gated decay: no epsilon decay while policy is still weak.
-            agent.step_count = step_count_before_episode
-            agent.epsilon = epsilon_before_episode
 
         won = bool(metrics["win"])
         curriculum.update_performance(won)
