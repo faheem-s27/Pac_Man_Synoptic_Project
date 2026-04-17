@@ -1,5 +1,5 @@
 {
-  "window_resolution": "1000x1000",
+  "window_resolution": "800x800",
   "tile_size": 40,
   "enable_sound": false,
 
@@ -7,12 +7,12 @@
   "lives": 1,
 
   "enable_ghosts": true,
-  "ghost_speed": 4,
+  "ghost_speed": 1.0,
   "ghost_speed_increment": 0.2,
   "blinky_active": true,
-  "pinky_active": true,
-  "inky_active": true,
-  "clyde_active": true,
+  "pinky_active": false,
+  "inky_active": false,
+  "clyde_active": false,
 
   "chase_duration": 20,
   "scatter_duration": 7,

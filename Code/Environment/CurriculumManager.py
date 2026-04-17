@@ -33,7 +33,18 @@ def _resolve_settings_path(settings_path: str | None) -> str:
 
 
 class CurriculumManager:
-    def __init__(self, settings_path: str = None):
+    def __init__(
+        self,
+        settings_path: str = None,
+        recent_window: int = 150,
+        promotion_threshold_stages_0_2: float = 0.75,
+        promotion_threshold_stages_3_5: float = 0.70,
+        promotion_threshold_stages_6_plus: float = 0.60,
+        promotion_threshold_all_stages: float | None = None,
+        tail_check_size: int = 5,
+        tail_check_enabled: bool = True,
+        tail_threshold_margin: float = 0.05,
+    ):
         path = _resolve_settings_path(settings_path)
         self.base_settings = Settings(path).get_all()
 
@@ -42,31 +53,26 @@ class CurriculumManager:
         self.starvation_base_ticks = int(self.base_settings.get("starvation_base_ticks", 900))
         self.starvation_ratio_scale = int(self.base_settings.get("starvation_ratio_scale", 900))
 
-        # Rolling performance window
-        self.recent_results = collections.deque(maxlen=50)
+        # Rolling performance window (algorithm-specific in suite).
+        self.recent_results = collections.deque(maxlen=max(1, int(recent_window)))
         self.current_stage = 0
 
-        # Operational Tracker for Grace Periods
-        self.episodes_in_current_stage = 0
+        self._promotion_threshold_stages_0_2 = float(promotion_threshold_stages_0_2)
+        self._promotion_threshold_stages_3_5 = float(promotion_threshold_stages_3_5)
+        self._promotion_threshold_stages_6_plus = float(promotion_threshold_stages_6_plus)
+        self._promotion_threshold_all_stages = (
+            None if promotion_threshold_all_stages is None else float(promotion_threshold_all_stages)
+        )
 
-        # Slow-and-steady difficulty ladder: small maps first, full game last.
+        self._tail_check_enabled = bool(tail_check_enabled)
+        self._tail_check_size = max(0, int(tail_check_size))
+        self._tail_threshold_margin = max(0.0, float(tail_threshold_margin))
+
+        # Expanded 8-stage ladder with an extra one-ghost bridge before two-ghost play.
         self.stage_profiles = [
-            # 0-4: routing fundamentals, no ghosts.
+            # Stage 0: Basic navigation, tiny pellet target.
             {
-                "window_resolution": "700x700",
-                "enable_ghosts": False,
-                "blinky_active": False,
-                "pinky_active": False,
-                "inky_active": False,
-                "clyde_active": False,
-                "enable_power_pellets": False,
-                "pellets_to_win_ratio": 0.10,
-                "pellets_to_win": -1,
-                "max_episode_steps": 1800,
-                "starvation_limit_ticks": 900,
-            },
-            {
-                "window_resolution": "700x700",
+                "window_resolution": "800x800",
                 "enable_ghosts": False,
                 "blinky_active": False,
                 "pinky_active": False,
@@ -75,9 +81,10 @@ class CurriculumManager:
                 "enable_power_pellets": False,
                 "pellets_to_win_ratio": 0.20,
                 "pellets_to_win": -1,
-                "max_episode_steps": 2200,
+                "max_episode_steps": 2500,
                 "starvation_limit_ticks": 1000,
             },
+            # Stage 1: Full navigation mastery, no ghosts.
             {
                 "window_resolution": "800x800",
                 "enable_ghosts": False,
@@ -86,38 +93,12 @@ class CurriculumManager:
                 "inky_active": False,
                 "clyde_active": False,
                 "enable_power_pellets": False,
-                "pellets_to_win_ratio": 0.30,
+                "pellets_to_win_ratio": 0.60,
                 "pellets_to_win": -1,
-                "max_episode_steps": 2600,
-                "starvation_limit_ticks": 1100,
-            },
-            {
-                "window_resolution": "800x800",
-                "enable_ghosts": False,
-                "blinky_active": False,
-                "pinky_active": False,
-                "inky_active": False,
-                "clyde_active": False,
-                "enable_power_pellets": False,
-                "pellets_to_win_ratio": 0.40,
-                "pellets_to_win": -1,
-                "max_episode_steps": 3200,
-                "starvation_limit_ticks": 1200,
-            },
-            {
-                "window_resolution": "800x800",
-                "enable_ghosts": False,
-                "blinky_active": False,
-                "pinky_active": False,
-                "inky_active": False,
-                "clyde_active": False,
-                "enable_power_pellets": False,
-                "pellets_to_win_ratio": 0.50,
-                "pellets_to_win": -1,
-                "max_episode_steps": 3600,
+                "max_episode_steps": 4000,
                 "starvation_limit_ticks": 1300,
             },
-            # 5-7: ghost bridge stages.
+            # Stage 2: One slow ghost, mostly scatter, no power pellets.
             {
                 "window_resolution": "800x800",
                 "enable_ghosts": True,
@@ -129,78 +110,83 @@ class CurriculumManager:
                 "scatter_duration": 20,
                 "chase_duration": 5,
                 "enable_power_pellets": False,
-                "pellets_to_win_ratio": 0.40,
+                "pellets_to_win_ratio": 0.50,
                 "pellets_to_win": -1,
-                "max_episode_steps": 5200,
-                "starvation_limit_ticks": 1400,
+                "max_episode_steps": 5500,
+                "starvation_limit_ticks": 1350,
             },
+            # Stage 3: Ghost-eating bridge with explicit bonus.
             {
-                "window_resolution": "900x900",
+                "window_resolution": "800x800",
                 "enable_ghosts": True,
                 "blinky_active": True,
                 "pinky_active": False,
                 "inky_active": False,
                 "clyde_active": False,
-                "ghost_speed": 1.2,
-                "scatter_duration": 15,
-                "chase_duration": 8,
-                "enable_power_pellets": False,
-                "pellets_to_win_ratio": 0.50,
-                "pellets_to_win": -1,
-                "max_episode_steps": 6200,
-                "starvation_limit_ticks": 1500,
-            },
-            {
-                "window_resolution": "900x900",
-                "enable_ghosts": True,
-                "blinky_active": True,
-                "pinky_active": True,
-                "inky_active": False,
-                "clyde_active": False,
-                "ghost_speed": 1.3,
-                "scatter_duration": 8,
-                "chase_duration": 8,
+                "ghost_speed": 1.1,
+                "scatter_duration": 10,
+                "chase_duration": 10,
                 "enable_power_pellets": True,
-                "pellets_to_win_ratio": 0.50,
+                "ghost_eat_bonus": 150.0,
+                "pellets_to_win_ratio": 0.55,
                 "pellets_to_win": -1,
-                "max_episode_steps": 7000,
-                "starvation_limit_ticks": 1550,
+                "max_episode_steps": 6500,
+                "starvation_limit_ticks": 1400,
             },
+            # Stage 4: One ghost bridge (faster, no explicit ghost-eat bonus).
             {
-                "window_resolution": "1000x1000",
+                "window_resolution": "800x800",
                 "enable_ghosts": True,
                 "blinky_active": True,
-                "pinky_active": True,
+                "pinky_active": False,
                 "inky_active": False,
                 "clyde_active": False,
-                "ghost_speed": 1.45,
-                "scatter_duration": 7,
-                "chase_duration": 20,
+                "ghost_speed": 1.4,
+                "scatter_duration": 10,
+                "chase_duration": 12,
                 "enable_power_pellets": True,
                 "pellets_to_win_ratio": 0.55,
                 "pellets_to_win": -1,
-                "max_episode_steps": 7600,
-                "starvation_limit_ticks": 1600,
+                "max_episode_steps": 7000,
+                "starvation_limit_ticks": 1450,
             },
+            # Stage 5: Two ghosts, power pellets, no bridge bonus.
             {
-                "window_resolution": "1000x1000",
+                "window_resolution": "800x800",
+                "enable_ghosts": True,
+                "blinky_active": True,
+                "pinky_active": True,
+                "inky_active": False,
+                "clyde_active": False,
+                "ghost_speed": 1.2,
+                "scatter_duration": 8,
+                "chase_duration": 15,
+                "enable_power_pellets": True,
+                "pellets_to_win_ratio": 0.55,
+                "pellets_to_win": -1,
+                "max_episode_steps": 8500,
+                "starvation_limit_ticks": 1550,
+            },
+            # Stage 6: Three ghosts, higher speed.
+            {
+                "window_resolution": "800x800",
                 "enable_ghosts": True,
                 "blinky_active": True,
                 "pinky_active": True,
                 "inky_active": True,
                 "clyde_active": False,
-                "ghost_speed": 1.65,
+                "ghost_speed": 1.55,
                 "scatter_duration": 7,
-                "chase_duration": 20,
+                "chase_duration": 18,
                 "enable_power_pellets": True,
-                "pellets_to_win_ratio": 0.65,
+                "pellets_to_win_ratio": 0.70,
                 "pellets_to_win": -1,
-                "max_episode_steps": 9800,
-                "starvation_limit_ticks": 1650,
+                "max_episode_steps": 10000,
+                "starvation_limit_ticks": 1600,
             },
-            # 10-11: full roster and final challenge.
+            # Stage 7: Full game.
             {
-                "window_resolution": "1000x1000",
+                "window_resolution": "800x800",
                 "enable_ghosts": True,
                 "blinky_active": True,
                 "pinky_active": True,
@@ -210,53 +196,24 @@ class CurriculumManager:
                 "scatter_duration": 7,
                 "chase_duration": 20,
                 "enable_power_pellets": True,
-                "pellets_to_win_ratio": 0.80,
-                "pellets_to_win": -1,
-                "max_episode_steps": 12500,
-                "starvation_limit_ticks": 1700,
-            },
-            {
-                "window_resolution": "1100x1100",
-                "enable_ghosts": True,
-                "blinky_active": True,
-                "pinky_active": True,
-                "inky_active": True,
-                "clyde_active": True,
-                "ghost_speed": self.base_settings.get("ghost_speed", 2),
-                "scatter_duration": 7,
-                "chase_duration": 20,
-                "enable_power_pellets": True,
                 "pellets_to_win_ratio": 1.0,
                 "pellets_to_win": -1,
-                "max_episode_steps": 15000,
+                "max_episode_steps": 13000,
                 "starvation_limit_ticks": 1800,
             },
         ]
 
     def _promotion_threshold(self) -> float:
+        if self._promotion_threshold_all_stages is not None:
+            return self._promotion_threshold_all_stages
         if self.current_stage <= 2:
-            return 0.65
+            return self._promotion_threshold_stages_0_2
         if self.current_stage <= 5:
-            return 0.70
-        return 0.65
-
-    def _demotion_threshold(self) -> float:
-        if self.current_stage <= 2:
-            return 0.02
-        if self.current_stage <= 5:
-            return 0.05
-        return 0.10
-
-    def _demotion_grace_episodes(self) -> int:
-        if self.current_stage <= 2:
-            return 60
-        if self.current_stage <= 5:
-            return 90
-        return 120
+            return self._promotion_threshold_stages_3_5
+        return self._promotion_threshold_stages_6_plus
 
     def update_performance(self, won: bool):
         self.recent_results.append(bool(won))
-        self.episodes_in_current_stage += 1
 
     # ---------------- PROMOTION ----------------
     def check_promotion(self) -> bool:
@@ -270,45 +227,22 @@ class CurriculumManager:
         win_rate = sum(self.recent_results) / len(self.recent_results)
         threshold = self._promotion_threshold()
 
-        # Stability check: last 5 should stay close to the stage threshold.
-        recent_5 = list(self.recent_results)[-5:]
-        recent_5_rate = sum(recent_5) / max(1, len(recent_5))
-        tail_threshold = max(0.0, threshold - 0.05)
+        promote = win_rate >= threshold
+        if promote and self._tail_check_enabled and self._tail_check_size > 0:
+            # Stability check over a configurable tail window.
+            tail_n = min(self._tail_check_size, len(self.recent_results))
+            recent_tail = list(self.recent_results)[-tail_n:]
+            recent_tail_rate = sum(recent_tail) / max(1, len(recent_tail))
+            tail_threshold = max(0.0, threshold - self._tail_threshold_margin)
+            promote = recent_tail_rate >= tail_threshold
 
-        if win_rate >= threshold and recent_5_rate >= tail_threshold:
+        if promote:
             self.current_stage += 1
             print(
                 f"\n--- CURRICULUM PROMOTION: Stage {self.current_stage} "
                 f"(win_rate={win_rate:.2f}, threshold={threshold:.2f}) ---"
             )
             self.recent_results.clear()
-            self.episodes_in_current_stage = 0
-            return True
-
-        return False
-
-    # ---------------- DEMOTION ----------------
-    def check_demotion(self) -> bool:
-        if self.current_stage == 0:
-            return False
-
-        if self.episodes_in_current_stage < self._demotion_grace_episodes():
-            return False
-
-        if len(self.recent_results) < self.recent_results.maxlen:
-            return False
-
-        win_rate = sum(self.recent_results) / len(self.recent_results)
-        threshold = self._demotion_threshold()
-
-        if win_rate <= threshold:
-            self.current_stage -= 1
-            print(
-                f"\n--- CURRICULUM DEMOTION: Stage {self.current_stage} "
-                f"(win_rate={win_rate:.2f}, threshold={threshold:.2f}) ---"
-            )
-            self.recent_results.clear()
-            self.episodes_in_current_stage = 0
             return True
 
         return False

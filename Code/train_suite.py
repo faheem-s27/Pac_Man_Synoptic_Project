@@ -18,6 +18,7 @@ import copy
 import random
 import pickle
 import argparse
+import time
 from datetime import datetime
 from collections import deque
 
@@ -47,14 +48,19 @@ TEST_SEEDS = list(range(10000, 10100))
 # -----------------------------------------------------------------------------
 # Suite constants
 # -----------------------------------------------------------------------------
-MAX_EPISODES = 100_000
-EARLY_STOP_STAGE = 11
+MAX_EPISODES = 75_000
+EARLY_STOP_STAGE = 7
 EARLY_STOP_WINDOW = 20
 EARLY_STOP_WIN_RATE = 0.85
 
 DQN_REWARD_SCALE = 100.0
-DQN_EPSILON_DECAY_SUITE = 5_000_000
+DQN_EPSILON_START_SUITE = 1.0
+DQN_EPSILON_END_SUITE = 0.15
+DQN_EPSILON_DECAY_SUITE = 1_500_000
 DQN_TRAIN_RENDER_MODE = None
+NEAT_GHOST_FITNESS_WEIGHT = 150.0
+NEAT_EVAL_SEEDS_DEFAULT = 5
+NEAT_MULTI_SEED_FROM_STAGE = 3
 
 DQN_CHECKPOINT_DIR = os.path.join(_HERE, "Models", "DQN", "Checkpoints")
 NEAT_CHECKPOINT_DIR = os.path.join(_HERE, "Models", "NEAT", "Checkpoints")
@@ -75,6 +81,7 @@ CSV_HEADER = [
     "Outcome", "Win", "Epsilon", "Pellets", "Power_Pellets",
     "Ghosts", "Explore_Rate", "Avg_Loss",
     "Generation", "Best_Fitness", "Avg_Fitness", "Species_Count", "Eval_Seeds_Per_Genome", "Max_Episode_Steps",
+    "Episode_Duration_Sec", "Pipeline_Elapsed_Sec", "Test_Run_Elapsed_Sec",
     "Is_Test",
 ]
 
@@ -147,6 +154,7 @@ def _stage_settings(curriculum: CurriculumManager, stage: int) -> dict:
     stage_idx = max(0, min(stage, len(curriculum.stage_profiles) - 1))
     curriculum.current_stage = stage_idx
     settings = curriculum.get_settings()
+    settings["curriculum_stage"] = int(stage_idx)
     settings["max_episode_steps"] = None
     return settings
 
@@ -295,11 +303,25 @@ def _neat_episode(net, settings: dict, maze_seed: int):
 def run_dqn_pipeline(log_path: str, resume: bool = False, resume_path: str | None = None) -> str:
     print("\n=== DQN PIPELINE START ===")
 
-    curriculum = CurriculumManager()
+    curriculum = CurriculumManager(
+        recent_window=150,
+        promotion_threshold_stages_0_2=0.65,
+        promotion_threshold_stages_3_5=0.70,
+        promotion_threshold_stages_6_plus=0.65,
+        tail_check_enabled=True,
+        tail_check_size=5,
+        tail_threshold_margin=0.05,
+    )
     rng = random.Random(12345)
     recent_wins = deque(maxlen=EARLY_STOP_WINDOW)
 
-    agent = DQNAgent(input_dim=29, output_dim=4, epsilon_decay=DQN_EPSILON_DECAY_SUITE)
+    agent = DQNAgent(
+        input_dim=29,
+        output_dim=4,
+        epsilon_start=DQN_EPSILON_START_SUITE,
+        epsilon_end=DQN_EPSILON_END_SUITE,
+        epsilon_decay=DQN_EPSILON_DECAY_SUITE,
+    )
 
     start_episode = 0
     if resume:
@@ -315,14 +337,17 @@ def run_dqn_pipeline(log_path: str, resume: bool = False, resume_path: str | Non
             print(f"[DQN] Resume requested but checkpoint not found: {ckpt_path}")
 
     final_episode = 0
+    pipeline_start = time.perf_counter()
     for episode in range(start_episode + 1, MAX_EPISODES + 1):
         final_episode = episode
 
         settings = curriculum.get_settings()
+        settings["curriculum_stage"] = int(curriculum.current_stage)
         seed = int(rng.choice(TRAIN_SEEDS))
         settings["maze_seed"] = seed
         settings["max_episode_steps"] = None
 
+        episode_start = time.perf_counter()
         metrics = _dqn_episode(
             agent,
             settings=settings,
@@ -330,6 +355,8 @@ def run_dqn_pipeline(log_path: str, resume: bool = False, resume_path: str | Non
             is_test=False,
             render_mode=DQN_TRAIN_RENDER_MODE,
         )
+        episode_duration = time.perf_counter() - episode_start
+        pipeline_elapsed = time.perf_counter() - pipeline_start
 
 
         won = bool(metrics["win"])
@@ -346,6 +373,7 @@ def run_dqn_pipeline(log_path: str, resume: bool = False, resume_path: str | Non
             metrics["outcome"], metrics["win"], float(agent.epsilon), metrics["pellets"], metrics["power_pellets"],
             metrics["ghosts"], metrics["explore_rate"], metrics["avg_loss"],
             -1, 0.0, 0.0, 0, 1, settings.get("max_episode_steps", None),
+            episode_duration, pipeline_elapsed, 0.0,
             False,
         ])
 
@@ -371,16 +399,28 @@ def run_dqn_pipeline(log_path: str, resume: bool = False, resume_path: str | Non
     torch.save(agent.policy_net.state_dict(), DQN_CHAMPION_PATH)
     print(f"[DQN] Champion saved -> {DQN_CHAMPION_PATH}")
 
-    # Zero-shot test (stage 5 fixed, 100 held-out seeds).
-    test_curriculum = CurriculumManager()
+    # Zero-shot test (fixed at suite target stage, 100 held-out seeds).
+    test_curriculum = CurriculumManager(
+        recent_window=150,
+        promotion_threshold_stages_0_2=0.65,
+        promotion_threshold_stages_3_5=0.70,
+        promotion_threshold_stages_6_plus=0.65,
+        tail_check_enabled=True,
+        tail_check_size=5,
+        tail_threshold_margin=0.05,
+    )
     test_settings = _stage_settings(test_curriculum, EARLY_STOP_STAGE)
     agent.epsilon = 0.0
+    test_start = time.perf_counter()
+    test_elapsed = 0.0
 
     for i, seed in enumerate(TEST_SEEDS, start=1):
         test_settings_ep = dict(test_settings)
+        test_settings_ep["curriculum_stage"] = int(test_curriculum.current_stage)
         test_settings_ep["maze_seed"] = int(seed)
         test_settings_ep["max_episode_steps"] = None
 
+        episode_start = time.perf_counter()
         metrics = _dqn_episode(
             agent,
             settings=test_settings_ep,
@@ -388,23 +428,32 @@ def run_dqn_pipeline(log_path: str, resume: bool = False, resume_path: str | Non
             is_test=True,
             render_mode=None,
         )
+        episode_duration = time.perf_counter() - episode_start
+        pipeline_elapsed = time.perf_counter() - pipeline_start
+        test_elapsed = time.perf_counter() - test_start
 
         _append_csv(log_path, [
             "DQN", i, test_curriculum.current_stage, int(seed), metrics["reward"], metrics["macro_steps"], metrics["micro_ticks"],
             metrics["outcome"], metrics["win"], 0.0, metrics["pellets"], metrics["power_pellets"],
             metrics["ghosts"], metrics["explore_rate"], 0.0,
             -1, 0.0, 0.0, 0, 1, test_settings_ep.get("max_episode_steps", None),
+            episode_duration, pipeline_elapsed, test_elapsed,
             True,
         ])
 
         print(f"[DQN][TEST] Stage={test_curriculum.current_stage} | Outcome={metrics['outcome']} | Episode={i}")
 
     print(f"[DQN] Training episodes: {final_episode}, test episodes: {len(TEST_SEEDS)}")
+    print(f"[DQN] Test run elapsed: {test_elapsed:.2f}s")
     print("=== DQN PIPELINE END ===\n")
     return DQN_CHAMPION_PATH
 
 
-def run_neat_pipeline(log_path: str, resume: bool = False, resume_path: str | None = None) -> str:
+def run_neat_pipeline(
+    log_path: str,
+    resume: bool = False,
+    resume_path: str | None = None,
+) -> str:
     print("\n=== NEAT PIPELINE START ===")
 
     if not os.path.exists(NEAT_CONFIG_PATH):
@@ -418,7 +467,13 @@ def run_neat_pipeline(log_path: str, resume: bool = False, resume_path: str | No
         NEAT_CONFIG_PATH,
     )
 
-    curriculum = CurriculumManager()
+    curriculum = CurriculumManager(
+        recent_window=50,
+        promotion_threshold_all_stages=0.55,
+        tail_check_enabled=True,
+        tail_check_size=10,
+        tail_threshold_margin=0.05,
+    )
     _validate_neat_schema(config, curriculum.get_settings())
 
     if resume:
@@ -447,6 +502,7 @@ def run_neat_pipeline(log_path: str, resume: bool = False, resume_path: str | No
     champion_genome = None
     champion_fitness = float("-inf")
     current_generation = 0
+    pipeline_start = time.perf_counter()
 
     def eval_genomes(genomes, cfg):
         nonlocal episode_counter
@@ -463,22 +519,52 @@ def run_neat_pipeline(log_path: str, resume: bool = False, resume_path: str | No
                 genome.fitness = -1e9
                 continue
 
-            settings = curriculum.get_settings()
-            seed = int(rng.choice(TRAIN_SEEDS))
-            settings["maze_seed"] = seed
-            settings["max_episode_steps"] = None
-
+            stage_before = int(curriculum.current_stage)
+            eval_seeds = 1 if stage_before < NEAT_MULTI_SEED_FROM_STAGE else NEAT_EVAL_SEEDS_DEFAULT
+            eval_records = []
             net = neat.nn.FeedForwardNetwork.create(genome, cfg)
-            metrics = _neat_episode(net, settings=settings, maze_seed=seed)
 
-            genome.fitness = float(metrics["reward"])
+            for _ in range(eval_seeds):
+                if early_stop or episode_counter >= MAX_EPISODES:
+                    break
+
+                settings = curriculum.get_settings()
+                settings["curriculum_stage"] = int(stage_before)
+                seed = int(rng.choice(TRAIN_SEEDS))
+                settings["maze_seed"] = seed
+                settings["max_episode_steps"] = None
+
+                episode_start = time.perf_counter()
+                metrics = _neat_episode(net, settings=settings, maze_seed=seed)
+                episode_duration = time.perf_counter() - episode_start
+                pipeline_elapsed = time.perf_counter() - pipeline_start
+
+                eval_records.append((metrics, seed, stage_before, episode_duration, pipeline_elapsed, settings))
+                episode_counter += 1
+
+                won = bool(metrics["win"])
+                curriculum.update_performance(won)
+                curriculum.check_promotion()
+                recent_wins.append(int(won))
+
+                win_rate = (sum(recent_wins) / len(recent_wins)) if recent_wins else 0.0
+                if (
+                    curriculum.current_stage >= EARLY_STOP_STAGE
+                    and len(recent_wins) == EARLY_STOP_WINDOW
+                    and win_rate >= EARLY_STOP_WIN_RATE
+                ):
+                    _print_success_banner("NEAT", curriculum.current_stage, win_rate, episode_counter)
+                    early_stop = True
+                    break
+
+            if not eval_records:
+                genome.fitness = -1e9
+                continue
+
+            mean_reward = float(np.mean([rec[0]["reward"] for rec in eval_records]))
+            mean_ghosts = float(np.mean([rec[0]["ghosts"] for rec in eval_records]))
+            genome.fitness = mean_reward + (mean_ghosts * NEAT_GHOST_FITNESS_WEIGHT)
             gen_fitness.append(float(genome.fitness))
-            episode_counter += 1
-
-            won = bool(metrics["win"])
-            curriculum.update_performance(won)
-            curriculum.check_promotion()
-            recent_wins.append(int(won))
 
             if genome.fitness > champion_fitness:
                 champion_fitness = float(genome.fitness)
@@ -487,24 +573,22 @@ def run_neat_pipeline(log_path: str, resume: bool = False, resume_path: str | No
             best_fit = max(gen_fitness) if gen_fitness else float(genome.fitness)
             avg_fit = float(np.mean(gen_fitness)) if gen_fitness else float(genome.fitness)
 
+            rep_metrics, rep_seed, rep_stage, rep_duration, rep_elapsed, rep_settings = eval_records[-1]
             _append_csv(log_path, [
-                "NEAT", episode_counter, curriculum.current_stage, seed, metrics["reward"], metrics["macro_steps"], metrics["micro_ticks"],
-                metrics["outcome"], metrics["win"], 0.0, metrics["pellets"], metrics["power_pellets"],
-                metrics["ghosts"], metrics["explore_rate"], 0.0,
-                current_generation, best_fit, avg_fit, species_count, 1, settings.get("max_episode_steps", None),
+                "NEAT", episode_counter, rep_stage, rep_seed, rep_metrics["reward"], rep_metrics["macro_steps"], rep_metrics["micro_ticks"],
+                rep_metrics["outcome"], rep_metrics["win"], 0.0, rep_metrics["pellets"], rep_metrics["power_pellets"],
+                rep_metrics["ghosts"], rep_metrics["explore_rate"], 0.0,
+                current_generation, best_fit, avg_fit, species_count, len(eval_records), rep_settings.get("max_episode_steps", None),
+                rep_duration, rep_elapsed, 0.0,
                 False,
             ])
 
-            print(f"[NEAT] Stage={curriculum.current_stage} | Outcome={metrics['outcome']} | Episode={episode_counter}")
+            print(
+                f"[NEAT] Stage={rep_stage} | Outcome={rep_metrics['outcome']} "
+                f"| Episode={episode_counter} | EvalSeeds={len(eval_records)}"
+            )
 
-            win_rate = (sum(recent_wins) / len(recent_wins)) if recent_wins else 0.0
-            if (
-                curriculum.current_stage >= EARLY_STOP_STAGE
-                and len(recent_wins) == EARLY_STOP_WINDOW
-                and win_rate >= EARLY_STOP_WIN_RATE
-            ):
-                _print_success_banner("NEAT", curriculum.current_stage, win_rate, episode_counter)
-                early_stop = True
+            if early_stop:
                 break
 
     while (not early_stop) and (episode_counter < MAX_EPISODES):
@@ -522,17 +606,30 @@ def run_neat_pipeline(log_path: str, resume: bool = False, resume_path: str | No
         pickle.dump(champion_genome, f)
     print(f"[NEAT] Champion saved -> {NEAT_CHAMPION_PATH}")
 
-    # Zero-shot test (stage 5 fixed, 100 held-out seeds).
-    test_curriculum = CurriculumManager()
+    # Zero-shot test (fixed at suite target stage, 100 held-out seeds).
+    test_curriculum = CurriculumManager(
+        recent_window=50,
+        promotion_threshold_all_stages=0.55,
+        tail_check_enabled=True,
+        tail_check_size=10,
+        tail_threshold_margin=0.05,
+    )
     test_settings = _stage_settings(test_curriculum, EARLY_STOP_STAGE)
     champion_net = neat.nn.FeedForwardNetwork.create(champion_genome, config)
+    test_start = time.perf_counter()
+    test_elapsed = 0.0
 
     for i, seed in enumerate(TEST_SEEDS, start=1):
         test_settings_ep = dict(test_settings)
+        test_settings_ep["curriculum_stage"] = int(test_curriculum.current_stage)
         test_settings_ep["maze_seed"] = int(seed)
         test_settings_ep["max_episode_steps"] = None
 
+        episode_start = time.perf_counter()
         metrics = _neat_episode(champion_net, settings=test_settings_ep, maze_seed=int(seed))
+        episode_duration = time.perf_counter() - episode_start
+        pipeline_elapsed = time.perf_counter() - pipeline_start
+        test_elapsed = time.perf_counter() - test_start
 
         _append_csv(log_path, [
             "NEAT", i, test_curriculum.current_stage, int(seed), metrics["reward"], metrics["macro_steps"], metrics["micro_ticks"],
@@ -540,18 +637,27 @@ def run_neat_pipeline(log_path: str, resume: bool = False, resume_path: str | No
             metrics["ghosts"], metrics["explore_rate"], 0.0,
             current_generation, float(champion_fitness), float(champion_fitness),
             len(getattr(population.species, "species", {})), 1, test_settings_ep.get("max_episode_steps", None),
+            episode_duration, pipeline_elapsed, test_elapsed,
             True,
         ])
 
         print(f"[NEAT][TEST] Stage={test_curriculum.current_stage} | Outcome={metrics['outcome']} | Episode={i}")
 
     print(f"[NEAT] Training episodes: {episode_counter}, test episodes: {len(TEST_SEEDS)}")
+    print(f"[NEAT] Test run elapsed: {test_elapsed:.2f}s")
     print("=== NEAT PIPELINE END ===\n")
     return NEAT_CHAMPION_PATH
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Sequential DQN+NEAT dissertation training suite")
+    parser.add_argument(
+        "--pipeline",
+        type=str,
+        choices=["dqn", "neat", "both"],
+        default="both",
+        help="Which pipeline(s) to run: dqn, neat, or both (default).",
+    )
     parser.add_argument("--resume-dqn", action="store_true", help="Resume DQN from suite checkpoint")
     parser.add_argument("--resume-neat", action="store_true", help="Resume NEAT from latest suite checkpoint")
     parser.add_argument("--dqn-checkpoint", type=str, default=None, help="Optional explicit DQN checkpoint path")
@@ -563,24 +669,28 @@ def main() -> None:
 
     print(f"Suite log: {SUITE_LOG_PATH}")
 
-    # 1) DQN pipeline (must fully complete first)
-    run_dqn_pipeline(
-        SUITE_LOG_PATH,
-        resume=bool(args.resume_dqn),
-        resume_path=args.dqn_checkpoint,
-    )
+    run_dqn = args.pipeline in ("dqn", "both")
+    run_neat = args.pipeline in ("neat", "both")
 
-    # Clear memory before NEAT pipeline.
-    gc.collect()
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
+    if run_dqn:
+        run_dqn_pipeline(
+            SUITE_LOG_PATH,
+            resume=bool(args.resume_dqn),
+            resume_path=args.dqn_checkpoint,
+        )
 
-    # 2) NEAT pipeline
-    run_neat_pipeline(
-        SUITE_LOG_PATH,
-        resume=bool(args.resume_neat),
-        resume_path=args.neat_checkpoint,
-    )
+    # Clear memory only when transitioning DQN -> NEAT in combined runs.
+    if run_dqn and run_neat:
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+    if run_neat:
+        run_neat_pipeline(
+            SUITE_LOG_PATH,
+            resume=bool(args.resume_neat),
+            resume_path=args.neat_checkpoint,
+        )
 
     print("All pipelines complete.")
 

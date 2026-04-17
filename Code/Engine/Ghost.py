@@ -553,9 +553,11 @@ class Pinky(Ghost):
     def get_target_tile(self, pacman):
         p_gx, p_gy = pacman.get_grid_position()
 
-        # Calculate 4 tiles ahead based on current heading
-        target_gx = p_gx + (pacman.direction[0] // pacman.speed) * 4
-        target_gy = p_gy + (pacman.direction[1] // pacman.speed) * 4
+        # Pac-Man direction is already a unit vector; do not scale via // speed.
+        dx = pacman.direction[0]
+        dy = pacman.direction[1]
+        target_gx = p_gx + dx * 4
+        target_gy = p_gy + dy * 4
 
         # Standardize: Clamp to maze interior to avoid targeting border walls
         target_gx = max(1, min(target_gx, self.maze.width - 2))
@@ -601,8 +603,8 @@ class Inky(Ghost):
 
         # 1. Get 2 tiles ahead of Pac-Man
         p_gx, p_gy = pacman.get_grid_position()
-        p_ahead_x = p_gx + (pacman.direction[0] // pacman.speed) * 2
-        p_ahead_y = p_gy + (pacman.direction[1] // pacman.speed) * 2
+        p_ahead_x = p_gx + pacman.direction[0] * 2
+        p_ahead_y = p_gy + pacman.direction[1] * 2
 
         # 2. Get vector from Blinky to that point
         b_gx, b_gy = self.blinky.grid_pos

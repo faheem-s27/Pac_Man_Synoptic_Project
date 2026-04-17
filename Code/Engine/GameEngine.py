@@ -413,6 +413,7 @@ class GameEngine:
         self.pacman.x = pacman_x
         self.pacman.y = pacman_y
         self.pacman.direction = (0, 0)
+        self.pacman.next_direction = (0, 0)
 
         # Reset global scatter/chase timer
         self.scatter_chase_timer = 0

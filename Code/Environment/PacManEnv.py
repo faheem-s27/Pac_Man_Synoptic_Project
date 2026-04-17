@@ -1,7 +1,7 @@
 """
 PacManEnv.py
 ============
-Egocentric Raycast Version — 31-dimensional observation.
+Egocentric Raycast Version — 29-dimensional observation.
 
 Observation layout (float32, all values normalised to [-1, 1]):
 ─────────────────────────────────────────────────────────────────
@@ -189,6 +189,9 @@ class PacManEnv(gym.Env):
         self.starvation_limit = self._starvation_limit_default
         self._ticks_since_food = 0
 
+        raw_ghost_eat_bonus = self._base_cfg.get("ghost_eat_bonus", 0.0)
+        self.ghost_eat_bonus = float(raw_ghost_eat_bonus)
+
         self._pygame_initialised = False
         self._screen = None
         self._clock  = None
@@ -217,6 +220,28 @@ class PacManEnv(gym.Env):
         self.current_stage   = None
         self.current_epsilon = None
 
+        raw_stage = self._base_cfg.get("curriculum_stage", None)
+        try:
+            self.current_stage = int(raw_stage) if raw_stage is not None else None
+        except (TypeError, ValueError):
+            self.current_stage = None
+
+    def _get_shaping_multipliers(self) -> tuple[float, float]:
+        """Return (food_mult, danger_mult) based on curriculum stage.
+
+        Early stages prioritize route-finding and pellet collection.
+        Later stages reduce food shaping and increase danger shaping to avoid
+        over-attraction to pellets when ghosts are the true bottleneck.
+        """
+        stage = self.current_stage
+        if stage is None:
+            return 5.0, 3.0
+        if stage <= 2:
+            return 5.0, 3.0
+        if stage == 3:
+            return 2.5, 3.5
+        return 1.0, 4.0
+
     # =========================================================================
     # Reset
     # =========================================================================
@@ -228,9 +253,17 @@ class PacManEnv(gym.Env):
         if seed is not None:
             cfg["maze_seed"] = seed
             np.random.seed(seed)
+        elif self.maze_seed is not None:
+            cfg["maze_seed"] = self.maze_seed
 
         raw_starvation = cfg.get("starvation_limit_ticks", self._starvation_limit_default)
         self.starvation_limit = max(1, int(raw_starvation))
+
+        raw_stage = cfg.get("curriculum_stage", self.current_stage)
+        try:
+            self.current_stage = int(raw_stage) if raw_stage is not None else None
+        except (TypeError, ValueError):
+            self.current_stage = None
 
         self._max_lives = max(1, int(cfg.get("lives", 3)))
 
@@ -397,7 +430,8 @@ class PacManEnv(gym.Env):
             gy = int((g.y + ts / 2.0) // ts)
             if g.state == GhostState.FRIGHTENED:
                 edible_ghost_tiles.add((gx, gy))
-            elif g.state != GhostState.EATEN:
+            # Treat only active, harmful ghosts as lethal; exclude cage-spawning ghosts.
+            elif g.state not in (GhostState.EATEN, GhostState.SPAWNING):
                 lethal_ghost_tiles.add((gx, gy))
 
         # ── Block A: raycasts (6 channels per direction) ──────────────────────
@@ -460,10 +494,11 @@ class PacManEnv(gym.Env):
         # ── Egocentric reordering ─────────────────────────────────────────────
         heading = self._get_pacman_heading_cardinal()
         heading_mapping = {
-            self.UP:      [0, 1, 2, 3],
-            self.DOWN:    [1, 0, 3, 2],
-            self.LEFT_C:  [2, 3, 1, 0],
-            self.RIGHT_C: [3, 2, 0, 1],
+            # Order is [forward, left, right, backward] in global ray indices.
+            self.UP:      [0, 2, 3, 1],
+            self.DOWN:    [1, 3, 2, 0],
+            self.LEFT_C:  [2, 1, 0, 3],
+            self.RIGHT_C: [3, 0, 1, 2],
         }
         order = heading_mapping.get(heading, heading_mapping[self.UP])
 
@@ -546,6 +581,7 @@ class PacManEnv(gym.Env):
                 "death_penalty":          0.0,
                 "starvation_penalty":     0.0,
                 "food_shaping_reward":    0.0,
+                "danger_shaping_reward":  0.0,
                 "invalid_action_penalty": -5.0,
                 "living_penalty":         0.0,
                 "total":                  0.0,
@@ -609,9 +645,12 @@ class PacManEnv(gym.Env):
             "death_penalty":       0.0,
             "starvation_penalty":  0.0,
             "food_shaping_reward": 0.0,
+            "danger_shaping_reward": 0.0,
             "living_penalty":      0.0,
             "total":               0.0,
         }
+
+        food_shaping_mult, danger_shaping_mult = self._get_shaping_multipliers()
 
         # Food-shaping: compare BFS nearest-food signal before and after the step.
         # Uses the named index constant — no magic numbers.
@@ -675,7 +714,7 @@ class PacManEnv(gym.Env):
                 sum(1 for g in eng.ghosts if g.state == GhostState.EATEN) - pre_eaten,
             )
             if ghosts_eaten > 0:
-                ghost_gain = 200.0 * ghosts_eaten
+                ghost_gain = (200.0 + self.ghost_eat_bonus) * ghosts_eaten
                 reward_tick += ghost_gain
                 reward_breakdown["ghost_reward"] += ghost_gain
                 self.ghosts_eaten_this_episode += ghosts_eaten
@@ -750,15 +789,29 @@ class PacManEnv(gym.Env):
         visit_count = self._visit_counts.get(tile_key, 0) + 1
         self._visit_counts[tile_key] = visit_count
         self._visited_tiles.add(tile_key)
+        new_obs = None
 
         # Food-approach shaping: rewards movement toward nearest pellet.
         # Exploration context is provided locally via visit_saturation per ray.
         if not pellet_eaten_in_step:
             new_obs          = self._get_obs()
             dist_food_after  = float(new_obs[self.FOOD_DIST_OBS_IDX])
-            shaping_reward   = (dist_food_after - dist_food_before) * 5.0
+            shaping_reward   = (dist_food_after - dist_food_before) * food_shaping_mult
             accumulated_reward += shaping_reward
             reward_breakdown["food_shaping_reward"] += shaping_reward
+
+        # Danger-approach shaping: penalises moving toward lethal ghosts.
+        # Symmetrical to food shaping; only fires when no death occurred this step.
+        if eng.lives == pre_lives:
+            if pellet_eaten_in_step or new_obs is None:
+                new_obs = self._get_obs()
+            dist_danger_after = float(new_obs[self.NEAR_DANGER_IDX])
+            dist_danger_before_val = float(initial_obs[self.NEAR_DANGER_IDX])
+            # If a lethal ghost exists (signal > -1.0), penalise getting closer.
+            if dist_danger_after > -1.0 and dist_danger_before_val > -1.0:
+                danger_shaping = (dist_danger_before_val - dist_danger_after) * danger_shaping_mult
+                accumulated_reward += danger_shaping
+                reward_breakdown["danger_shaping_reward"] += danger_shaping
 
         accumulated_reward              -= 0.5
         reward_breakdown["living_penalty"] -= 0.5

@@ -339,10 +339,10 @@ class DQNAgent:
         input_dim:      int   = OBS_DIM,
         output_dim:     int   = 4,
         lr:             float = 3e-4,
-        gamma:          float = 0.995,
+        gamma:          float = 0.997,
         epsilon_start:  float = 1.0,
-        epsilon_end:    float = 0.1,
-        epsilon_decay:  int   = 2_000_000,
+        epsilon_end:    float = 0.15,
+        epsilon_decay:  int   = 600_000,
     ):
         self.action_dim = output_dim
         self.gamma      = gamma
@@ -393,7 +393,7 @@ class DQNAgent:
         self.batch_size   = 256
         self.train_freq   = 4       # Optimize every N environment steps.
         self.warmup_steps = 10_000  # Don't train until buffer has this many entries.
-        self.tau          = 0.005   # Soft target-update rate.
+        self.tau          = 0.003   # Soft target-update rate.
 
     # =========================================================================
     # Action selection
