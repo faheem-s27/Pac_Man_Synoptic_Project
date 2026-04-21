@@ -59,6 +59,8 @@ DQN_EPSILON_START_SUITE = 1.0
 DQN_EPSILON_END_SUITE = 0.15
 DQN_EPSILON_DECAY_SUITE = 1_000_000
 DQN_TRAIN_RENDER_MODE = None
+DQN_USE_AMP_SUITE = True
+DQN_TRAIN_NUM_ENVS = 8
 
 NEAT_GHOST_FITNESS_WEIGHT = 150.0
 NEAT_EVAL_SEEDS_EARLY = 3
@@ -365,7 +367,10 @@ def run_dqn_pipeline(
         epsilon_start=DQN_EPSILON_START_SUITE,
         epsilon_end=DQN_EPSILON_END_SUITE,
         epsilon_decay=DQN_EPSILON_DECAY_SUITE,
+        use_amp=DQN_USE_AMP_SUITE,
     )
+    print(f"[DQN] AMP enabled: {agent.amp_enabled}")
+    print(f"[DQN] Parallel train envs: {DQN_TRAIN_NUM_ENVS}")
 
     start_episode = 0
     if resume:
@@ -380,67 +385,146 @@ def run_dqn_pipeline(
         else:
             print(f"[DQN] Resume requested but checkpoint not found: {ckpt_path}")
 
-    final_episode = 0
+    final_episode = int(start_episode)
     pipeline_start = time.perf_counter()
-    for episode in range(start_episode + 1, MAX_EPISODES + 1):
-        final_episode = episode
+    early_stop = False
 
-        settings = curriculum.get_settings()
-        settings["curriculum_stage"] = int(curriculum.current_stage)
-        seed = int(rng.choice(train_seeds))
-        settings["maze_seed"] = seed
-        settings["max_episode_steps"] = None
+    while final_episode < MAX_EPISODES and not early_stop:
+        stage_at_launch = int(curriculum.current_stage)
+        base_settings = curriculum.get_settings()
+        base_settings["curriculum_stage"] = stage_at_launch
+        base_settings["max_episode_steps"] = None
 
-        episode_start = time.perf_counter()
-        metrics = _dqn_episode(
-            agent,
-            settings=settings,
-            maze_seed=seed,
-            is_test=False,
-            render_mode=DQN_TRAIN_RENDER_MODE,
-        )
-        episode_duration = time.perf_counter() - episode_start
-        pipeline_elapsed = time.perf_counter() - pipeline_start
+        batch_size = min(DQN_TRAIN_NUM_ENVS, MAX_EPISODES - final_episode)
+        active_runs = []
 
+        for _ in range(batch_size):
+            seed = int(rng.choice(train_seeds))
+            run_settings = dict(base_settings)
+            run_settings["maze_seed"] = seed
 
-        won = bool(metrics["win"])
-        curriculum.update_performance(won)
-        promoted = curriculum.check_promotion()
-        if promoted:
-            agent.apply_exploration_jolt(min_epsilon=0.2, duration_steps=50_000)
-
-        recent_wins.append(int(won))
-        win_rate = (sum(recent_wins) / len(recent_wins)) if recent_wins else 0.0
-
-        _append_csv(log_path, [
-            "DQN", episode, curriculum.current_stage, seed, metrics["reward"], metrics["macro_steps"], metrics["micro_ticks"],
-            metrics["outcome"], metrics["win"], float(agent.epsilon), metrics["pellets"], metrics["power_pellets"],
-            metrics["ghosts"], metrics["explore_rate"], metrics["avg_loss"],
-            -1, 0.0, 0.0, 0, 1, settings.get("max_episode_steps", None),
-            episode_duration, pipeline_elapsed, 0.0,
-            "train",
-            seed_regime_name,
-            False,
-        ])
-
-        print(f"[DQN] Stage={curriculum.current_stage} | Outcome={metrics['outcome']} | Episode={episode}")
-
-        if (
-            curriculum.current_stage >= EARLY_STOP_STAGE
-            and len(recent_wins) == EARLY_STOP_WINDOW
-            and win_rate >= EARLY_STOP_WIN_RATE
-        ):
-            _print_success_banner("DQN", curriculum.current_stage, win_rate, episode)
-            break
-
-        if episode % DQN_SAVE_EVERY_EPISODES == 0:
-            save_checkpoint(
-                dqn_suite_checkpoint_path,
-                agent,
-                episode,
-                curriculum=curriculum,
-                include_curriculum=True,
+            env = DQNActionMaskingWrapper(
+                PacManEnv(render_mode=DQN_TRAIN_RENDER_MODE, obs_type="vector", settings=run_settings)
             )
+            state, _ = env.reset(seed=seed)
+
+            active_runs.append({
+                "env": env,
+                "state": state,
+                "seed": seed,
+                "stage_used": stage_at_launch,
+                "settings": run_settings,
+                "start_time": time.perf_counter(),
+                "reward": 0.0,
+                "macro_steps": 0,
+                "micro_ticks": 0,
+                "losses": [],
+                "last_info": {},
+                "done": False,
+            })
+
+        while any(not run["done"] for run in active_runs):
+            for run in active_runs:
+                if run["done"]:
+                    continue
+
+                env = run["env"]
+                state = run["state"]
+                valid_actions = env.get_valid_actions()
+
+                policy_action, exploring = agent.select_action(
+                    state,
+                    valid_actions=valid_actions,
+                    return_exploration=True,
+                )
+                action = env.pick_action(policy_action, exploring=exploring)
+
+                next_state, reward, terminated, truncated, info = env.step(action)
+                run["done"] = bool(terminated or truncated)
+
+                run["macro_steps"] += 1
+                step_ticks = int(info.get("internal_ticks", 0)) if isinstance(info, dict) else 0
+                run["micro_ticks"] += max(0, step_ticks)
+                discount_pow = float(agent.gamma ** max(1, step_ticks))
+                run["reward"] += float(reward)
+                run["last_info"] = info if isinstance(info, dict) else {}
+
+                next_valid_actions = env.get_valid_actions()
+                next_valid_mask = np.zeros(agent.action_dim, dtype=np.float32)
+                for a in next_valid_actions:
+                    if 0 <= int(a) < agent.action_dim:
+                        next_valid_mask[int(a)] = 1.0
+
+                scaled_reward = float(reward) / DQN_REWARD_SCALE
+                agent.memory.push(
+                    state,
+                    int(action),
+                    scaled_reward,
+                    next_state,
+                    run["done"],
+                    next_valid_mask=next_valid_mask,
+                    discount_pow=discount_pow,
+                )
+
+                loss = agent.optimize_model()
+                if loss is not None:
+                    run["losses"].append(float(loss))
+                    agent.update_target_network()
+
+                run["state"] = next_state
+
+        for run in active_runs:
+            env = run["env"]
+            episode_duration = time.perf_counter() - float(run["start_time"])
+            pipeline_elapsed = time.perf_counter() - pipeline_start
+
+            won = bool(env.unwrapped.engine.won)
+            outcome = "WIN" if won else str(run["last_info"].get("death_cause", "NONE"))
+            avg_loss = float(np.mean(run["losses"])) if run["losses"] else 0.0
+
+            env.close()
+
+            final_episode += 1
+
+            curriculum.update_performance(won)
+            promoted = curriculum.check_promotion()
+            if promoted:
+                agent.apply_exploration_jolt(min_epsilon=0.2, duration_steps=50_000)
+
+            recent_wins.append(int(won))
+            win_rate = (sum(recent_wins) / len(recent_wins)) if recent_wins else 0.0
+
+            _append_csv(log_path, [
+                "DQN", final_episode, run["stage_used"], run["seed"], run["reward"], run["macro_steps"], run["micro_ticks"],
+                outcome, int(won), float(agent.epsilon),
+                int(run["last_info"].get("pellets", 0)), int(run["last_info"].get("power_pellets", 0)),
+                int(run["last_info"].get("ghosts", 0)), float(run["last_info"].get("explore_rate", 0.0)), avg_loss,
+                -1, 0.0, 0.0, 0, 1, run["settings"].get("max_episode_steps", None),
+                episode_duration, pipeline_elapsed, 0.0,
+                "train",
+                seed_regime_name,
+                False,
+            ])
+
+            print(f"[DQN] Stage={run['stage_used']} | Outcome={outcome} | Episode={final_episode}")
+
+            if (
+                curriculum.current_stage >= EARLY_STOP_STAGE
+                and len(recent_wins) == EARLY_STOP_WINDOW
+                and win_rate >= EARLY_STOP_WIN_RATE
+            ):
+                _print_success_banner("DQN", curriculum.current_stage, win_rate, final_episode)
+                early_stop = True
+                break
+
+            if final_episode % DQN_SAVE_EVERY_EPISODES == 0:
+                save_checkpoint(
+                    dqn_suite_checkpoint_path,
+                    agent,
+                    final_episode,
+                    curriculum=curriculum,
+                    include_curriculum=True,
+                )
 
     torch.save(agent.policy_net.state_dict(), dqn_champion_path)
     print(f"[DQN] Champion saved -> {dqn_champion_path}")

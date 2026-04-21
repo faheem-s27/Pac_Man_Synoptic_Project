@@ -22,6 +22,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
+from torch.cuda.amp import autocast, GradScaler
 import numpy as np
 import random
 
@@ -343,6 +344,7 @@ class DQNAgent:
         epsilon_start:  float = 1.0,
         epsilon_end:    float = 0.15,
         epsilon_decay:  int   = 600_000,
+        use_amp:        bool | None = None,
     ):
         self.action_dim = output_dim
         self.gamma      = gamma
@@ -359,6 +361,8 @@ class DQNAgent:
 
         # ── Device ────────────────────────────────────────────────────────────
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.amp_enabled = (self.device.type == "cuda") if use_amp is None else bool(use_amp and self.device.type == "cuda")
+        self.grad_scaler = GradScaler(enabled=self.amp_enabled)
 
         # ── Networks (Dueling DQN) ────────────────────────────────────────────
         self.policy_net = DuelingQNetwork(input_dim, output_dim).to(self.device)
@@ -479,45 +483,49 @@ class DQNAgent:
         disc_t       = torch.tensor(discount_pows,    dtype=torch.float32).to(self.device)
         is_w_t       = torch.tensor(is_weights,       dtype=torch.float32).to(self.device)
 
-        # ── Current Q-values ──────────────────────────────────────────────────
-        current_q = self.policy_net(state_t).gather(1, action_t).squeeze(1)
+        with autocast(enabled=self.amp_enabled):
+            # ── Current Q-values ──────────────────────────────────────────────
+            current_q = self.policy_net(state_t).gather(1, action_t).squeeze(1)
 
-        # ── Double DQN target ─────────────────────────────────────────────────
-        with torch.no_grad():
-            policy_next_q      = self.policy_net(next_state_t)
-            target_next_q_all  = self.target_net(next_state_t)
+            # ── Double DQN target ─────────────────────────────────────────────
+            with torch.no_grad():
+                policy_next_q      = self.policy_net(next_state_t)
+                target_next_q_all  = self.target_net(next_state_t)
 
-            valid_bool  = mask_t > 0.5
-            all_invalid = ~valid_bool.any(dim=1)
+                valid_bool  = mask_t > 0.5
+                all_invalid = ~valid_bool.any(dim=1)
 
-            # Policy net selects action, target net evaluates it.
-            masked_policy = policy_next_q.masked_fill(~valid_bool, float("-inf"))
-            next_actions  = masked_policy.argmax(1, keepdim=True)
+                # Policy net selects action, target net evaluates it.
+                masked_policy = policy_next_q.masked_fill(~valid_bool, float("-inf"))
+                next_actions  = masked_policy.argmax(1, keepdim=True)
 
-            masked_target = target_next_q_all.masked_fill(~valid_bool, float("-inf"))
-            next_q = masked_target.gather(1, next_actions).squeeze(1)
-            next_q = torch.where(all_invalid, torch.zeros_like(next_q), next_q)
+                masked_target = target_next_q_all.masked_fill(~valid_bool, float("-inf"))
+                next_q = masked_target.gather(1, next_actions).squeeze(1)
+                next_q = torch.where(all_invalid, torch.zeros_like(next_q), next_q)
 
-            target_q = reward_t + disc_t * next_q * (1.0 - done_t)
+                target_q = reward_t + disc_t * next_q * (1.0 - done_t)
+
+            # ── IS-weighted Huber loss ────────────────────────────────────────
+            elementwise_loss = F.smooth_l1_loss(current_q, target_q, reduction="none")
+            loss = (is_w_t * elementwise_loss).mean()
 
         # ── Per-sample TD errors for priority update ──────────────────────────
         with torch.no_grad():
-            td_errors = (current_q - target_q).detach().cpu().numpy()
+            td_errors = (current_q - target_q).detach().float().cpu().numpy()
         self.memory.update_priorities(tree_indices, td_errors)
 
-        # ── IS-weighted Huber loss ────────────────────────────────────────────
-        elementwise_loss = F.smooth_l1_loss(current_q, target_q, reduction="none")
-        loss = (is_w_t * elementwise_loss).mean()
+        self.optimizer.zero_grad(set_to_none=True)
+        if self.amp_enabled:
+            self.grad_scaler.scale(loss).backward()
+            self.grad_scaler.unscale_(self.optimizer)
+            torch.nn.utils.clip_grad_norm_(self.policy_net.parameters(), 1.0)
+            self.grad_scaler.step(self.optimizer)
+            self.grad_scaler.update()
+        else:
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(self.policy_net.parameters(), 1.0)
+            self.optimizer.step()
 
-        self.optimizer.zero_grad()
-        loss.backward()
-
-        # Gradient clipping: 1.0 (reduced from 10) for training stability.
-        # Wide reward range (-500 to +1000) can cause large gradient spikes;
-        # tighter clipping prevents Q-value instability.
-        torch.nn.utils.clip_grad_norm_(self.policy_net.parameters(), 1.0)
-
-        self.optimizer.step()
         self.scheduler.step()
 
         return float(loss.item())

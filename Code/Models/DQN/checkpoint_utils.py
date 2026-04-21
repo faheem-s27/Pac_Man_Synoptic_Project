@@ -59,7 +59,12 @@ def save_checkpoint(path: str, agent, episode: int, curriculum=None, include_cur
         "optimizer_state_dict": agent.optimizer.state_dict(),
         "epsilon": float(agent.epsilon),
         "step_count": int(agent.step_count),
+        "amp_enabled": bool(getattr(agent, "amp_enabled", False)),
     }
+
+    grad_scaler = getattr(agent, "grad_scaler", None)
+    if grad_scaler is not None and hasattr(grad_scaler, "state_dict"):
+        payload["grad_scaler_state_dict"] = grad_scaler.state_dict()
 
     if include_curriculum and curriculum is not None:
         payload["curriculum_state"] = _serialize_curriculum(curriculum)
@@ -104,6 +109,18 @@ def load_checkpoint(path: str, agent, curriculum=None, map_location=None) -> dic
 
         agent.epsilon = float(data.get("epsilon", agent.epsilon))
         agent.step_count = int(data.get("step_count", agent.step_count))
+
+        # AMP restore is best-effort and remains backward-compatible with old checkpoints.
+        if hasattr(agent, "amp_enabled") and "amp_enabled" in data:
+            ckpt_amp_enabled = bool(data.get("amp_enabled", False))
+            agent.amp_enabled = bool(ckpt_amp_enabled and getattr(agent.device, "type", "cpu") == "cuda")
+
+        scaler_state = data.get("grad_scaler_state_dict")
+        if scaler_state and hasattr(agent, "grad_scaler") and agent.grad_scaler is not None:
+            try:
+                agent.grad_scaler.load_state_dict(scaler_state)
+            except Exception:
+                pass
 
         if curriculum is not None and "curriculum_state" in data:
             _restore_curriculum(curriculum, data["curriculum_state"])
