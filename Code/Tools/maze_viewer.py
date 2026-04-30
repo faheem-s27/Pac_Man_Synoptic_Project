@@ -23,7 +23,7 @@ SETTINGS_PATH = os.path.join(_CODE, "game_settings.json")
 
 # Manual override for viewer-only resolution (takes precedence over game_settings.json).
 # Set to a string like "1000x1000" to force that resolution, or keep None to use settings/CLI.
-WINDOW_RESOLUTION_OVERRIDE = "800x800"
+WINDOW_RESOLUTION_OVERRIDE = "1000x1000"
 
 
 def _parse_resolution(resolution_str):

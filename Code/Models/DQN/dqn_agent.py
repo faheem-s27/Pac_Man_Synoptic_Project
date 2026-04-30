@@ -22,7 +22,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
-from torch.cuda.amp import autocast, GradScaler
 import numpy as np
 import random
 
@@ -362,7 +361,7 @@ class DQNAgent:
         # ── Device ────────────────────────────────────────────────────────────
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.amp_enabled = (self.device.type == "cuda") if use_amp is None else bool(use_amp and self.device.type == "cuda")
-        self.grad_scaler = GradScaler(enabled=self.amp_enabled)
+        self.grad_scaler = torch.amp.GradScaler("cuda", enabled=self.amp_enabled)
 
         # ── Networks (Dueling DQN) ────────────────────────────────────────────
         self.policy_net = DuelingQNetwork(input_dim, output_dim).to(self.device)
@@ -483,7 +482,7 @@ class DQNAgent:
         disc_t       = torch.tensor(discount_pows,    dtype=torch.float32).to(self.device)
         is_w_t       = torch.tensor(is_weights,       dtype=torch.float32).to(self.device)
 
-        with autocast(enabled=self.amp_enabled):
+        with torch.amp.autocast("cuda", enabled=self.amp_enabled):
             # ── Current Q-values ──────────────────────────────────────────────
             current_q = self.policy_net(state_t).gather(1, action_t).squeeze(1)
 
