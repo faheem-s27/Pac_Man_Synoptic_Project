@@ -1,0 +1,7 @@
+torch
+neat-python
+gymnasium
+pygame
+pandas
+scipy
+matplotlib
